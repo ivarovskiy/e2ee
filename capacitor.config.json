@@ -1,0 +1,20 @@
+{
+  "appId": "com.sft.securetransfer",
+  "appName": "Secure File Transfer",
+  "webDir": "static",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "launchShowDuration": 1000,
+      "backgroundColor": "#0c0e14",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#0c0e14"
+    }
+  }
+}

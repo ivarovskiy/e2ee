@@ -1,0 +1,29 @@
+# render.yaml — конфігурація для деплою на Render.com
+# Render автоматично зчитує цей файл при підключенні GitHub-репозиторію.
+#
+# Деплой:
+#   1. Завантажити проект на GitHub
+#   2. render.com → New → Web Service → підключити репо
+#   3. Render автоматично знайде render.yaml і задеплоїть
+#
+# Або вручну: New Web Service → Docker → вказати Dockerfile
+
+services:
+  - type: web
+    name: secure-file-transfer-relay
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SFT_HOST
+        value: 0.0.0.0
+      - key: SFT_LOG_LEVEL
+        value: INFO
+      - key: SFT_SESSION_TTL_SECONDS
+        value: 1800
+      - key: SFT_MAX_SESSIONS
+        value: 500
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    healthCheckPath: /api/health
