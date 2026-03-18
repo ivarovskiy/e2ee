@@ -10,8 +10,6 @@
  *   1. Генерація QR-коду з fingerprint публічного ключа
  *   2. Сканування QR-коду партнера через камеру смартфона
  *   3. Порівняння відсканованого fingerprint з очікуваним
- *
- * Верифікація є ОБОВ'ЯЗКОВИМ кроком — без неї передача файлу неможлива.
  */
 
 const QRModule = (() => {
@@ -24,46 +22,94 @@ const QRModule = (() => {
     // ── Генерація QR-коду ──────────────────────────────────────────
 
     /**
-     * Генерує QR-код з fingerprint і розміщує його у DOM-елементі.
+     * Генерує QR-код і розміщує його у DOM-елементі.
      *
-     * @param {string} fingerprint — 64-символьний hex SHA-256
+     * @param {string} data — дані для кодування (fingerprint або URL)
      * @param {HTMLElement} container — DOM-елемент для QR
      * @param {Object} options — додаткові опції
      */
-    function generateQR(fingerprint, container, options = {}) {
+    function generateQR(data, container, options = {}) {
+        if (!container) {
+            console.error('[QR] Container element not found');
+            return;
+        }
+
         // Очищуємо контейнер
         container.innerHTML = '';
 
+        if (!data) {
+            console.error('[QR] No data to encode');
+            container.textContent = 'Немає даних для QR';
+            return;
+        }
+
         if (typeof QRCode === 'undefined') {
-            container.textContent = 'QR library not loaded';
-            console.error('[QR] QRCode library not available');
+            console.error('[QR] QRCode library not loaded');
+            // Fallback: показуємо дані як текст
+            _renderFallbackQR(container, data);
             return;
         }
 
         const size = options.size || 200;
-        const colorDark = options.colorDark || '#ffffff';
-        const colorLight = options.colorLight || '#00000000';
 
-        new QRCode(container, {
-            text: fingerprint,
-            width: size,
-            height: size,
-            colorDark: colorDark,
-            colorLight: colorLight,
-            correctLevel: QRCode.CorrectLevel.M,
-        });
+        try {
+            new QRCode(container, {
+                text: data,
+                width: size,
+                height: size,
+                colorDark: '#ffffff',
+                colorLight: '#111318',
+                correctLevel: QRCode.CorrectLevel.M,
+            });
+
+            // Перевіряємо що QR справді створився
+            setTimeout(() => {
+                const canvas = container.querySelector('canvas');
+                const img = container.querySelector('img');
+                if (!canvas && !img) {
+                    console.warn('[QR] QR code element not created, using fallback');
+                    container.innerHTML = '';
+                    _renderFallbackQR(container, data);
+                }
+            }, 500);
+        } catch (err) {
+            console.error('[QR] Generation error:', err);
+            _renderFallbackQR(container, data);
+        }
+    }
+
+    /**
+     * Fallback: якщо QR-бібліотека не завантажилась,
+     * рендеримо дані як текст, який можна скопіювати.
+     */
+    function _renderFallbackQR(container, data) {
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'padding:16px;text-align:center;';
+
+        const label = document.createElement('div');
+        label.textContent = 'QR не доступний. Скопіюйте дані:';
+        label.style.cssText = 'font-size:0.78rem;color:#8b92a8;margin-bottom:8px;';
+        wrapper.appendChild(label);
+
+        const text = document.createElement('div');
+        text.textContent = data;
+        text.style.cssText = 'font-family:monospace;font-size:0.7rem;word-break:break-all;color:#6187f5;user-select:all;line-height:1.6;padding:8px;background:rgba(97,135,245,0.08);border-radius:6px;';
+        wrapper.appendChild(text);
+
+        container.appendChild(wrapper);
     }
 
     // ── Сканування QR-коду через камеру ────────────────────────────
 
     /**
      * Запускає сканування QR-коду через камеру.
-     * Повертає Promise з розпізнаним текстом.
+     * На Android Capacitor використовує WebView getUserMedia
+     * з обробкою дозволів через MainActivity.
      *
-     * @param {HTMLVideoElement} videoElement — елемент відео
-     * @param {HTMLCanvasElement} canvasElement — елемент canvas (для jsQR)
-     * @param {Function} onFrame — колбек на кожен кадр (для UI індикації)
-     * @returns {Promise<string>} — розпізнаний текст QR-коду
+     * @param {HTMLVideoElement} videoElement
+     * @param {HTMLCanvasElement} canvasElement
+     * @param {Function} onFrame
+     * @returns {Promise<string>}
      */
     async function startScanning(videoElement, canvasElement, onFrame) {
         if (scanning) {
@@ -72,29 +118,55 @@ const QRModule = (() => {
 
         scanning = true;
 
-        // Запитуємо доступ до камери (задня камера для мобільних)
+        // Перевіряємо підтримку
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            scanning = false;
+            throw new Error('Камера не підтримується на цьому пристрої. Використайте ручну верифікацію.');
+        }
+
+        // Запитуємо доступ до камери
         try {
+            // Спочатку спробуємо задню камеру (для мобільних)
             videoStream = await navigator.mediaDevices.getUserMedia({
                 video: {
-                    facingMode: 'environment', // задня камера
+                    facingMode: { ideal: 'environment' },
                     width: { ideal: 640 },
                     height: { ideal: 480 },
                 },
+                audio: false,
             });
-        } catch (err) {
-            scanning = false;
-            if (err.name === 'NotAllowedError') {
-                throw new Error('Доступ до камери заборонено. Дозвольте камеру у налаштуваннях браузера.');
+        } catch (firstErr) {
+            // Якщо задня камера не доступна, спробуємо будь-яку камеру
+            try {
+                videoStream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: false,
+                });
+            } catch (err) {
+                scanning = false;
+                if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                    throw new Error('Доступ до камери заборонено. Дозвольте камеру у налаштуваннях додатку.');
+                }
+                if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                    throw new Error('Камера не знайдена. Використайте ручну верифікацію.');
+                }
+                if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+                    throw new Error('Камера зайнята іншим додатком.');
+                }
+                throw new Error(`Помилка камери: ${err.message}`);
             }
-            if (err.name === 'NotFoundError') {
-                throw new Error('Камера не знайдена на цьому пристрої.');
-            }
-            throw new Error(`Помилка камери: ${err.message}`);
         }
 
         videoElement.srcObject = videoStream;
-        videoElement.setAttribute('playsinline', true); // iOS Safari
-        await videoElement.play();
+        videoElement.setAttribute('playsinline', 'true');
+        videoElement.setAttribute('muted', 'true');
+
+        try {
+            await videoElement.play();
+        } catch (playErr) {
+            stopScanning();
+            throw new Error('Не вдалось запустити відео з камери.');
+        }
 
         const ctx = canvasElement.getContext('2d', { willReadFrequently: true });
 
@@ -110,12 +182,10 @@ const QRModule = (() => {
                     return;
                 }
 
-                // Налаштовуємо canvas під розміри відео
                 canvasElement.width = videoElement.videoWidth;
                 canvasElement.height = videoElement.videoHeight;
                 ctx.drawImage(videoElement, 0, 0);
 
-                // Зчитуємо пікселі для jsQR
                 const imageData = ctx.getImageData(0, 0, canvasElement.width, canvasElement.height);
 
                 if (onFrame) onFrame();
@@ -123,7 +193,7 @@ const QRModule = (() => {
                 // jsQR розпізнавання
                 if (typeof jsQR !== 'undefined') {
                     const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                        inversionAttempts: 'dontInvert',
+                        inversionAttempts: 'attemptBoth',
                     });
 
                     if (code && code.data) {
@@ -152,7 +222,9 @@ const QRModule = (() => {
         }
 
         if (videoStream) {
-            videoStream.getTracks().forEach(track => track.stop());
+            videoStream.getTracks().forEach(track => {
+                try { track.stop(); } catch(e) {}
+            });
             videoStream = null;
         }
     }
@@ -161,17 +233,12 @@ const QRModule = (() => {
 
     /**
      * Порівнює відсканований fingerprint з очікуваним.
-     * Порівняння у постійному часі (захист від timing attack).
-     *
-     * @param {string} scanned — відсканований fingerprint
-     * @param {string} expected — очікуваний fingerprint партнера
-     * @returns {boolean} true якщо збігається
+     * Constant-time порівняння (захист від timing attack).
      */
     function verifyFingerprint(scanned, expected) {
         if (!scanned || !expected) return false;
         if (scanned.length !== expected.length) return false;
 
-        // Constant-time порівняння
         const a = scanned.toLowerCase();
         const b = expected.toLowerCase();
         let diff = 0;
@@ -183,23 +250,11 @@ const QRModule = (() => {
 
     // ── Форматування fingerprint для відображення ──────────────────
 
-    /**
-     * Форматує fingerprint у читабельний вигляд.
-     * Наприклад: "a1b2c3d4 e5f6a7b8 ..."
-     *
-     * @param {string} fingerprint — 64-символьний hex
-     * @returns {string} — форматований рядок
-     */
     function formatFingerprint(fingerprint) {
         if (!fingerprint) return '';
         return fingerprint.match(/.{1,8}/g)?.join(' ') || fingerprint;
     }
 
-    /**
-     * Повертає скорочений fingerprint для UI.
-     * @param {string} fingerprint
-     * @returns {string} — перші 16 символів
-     */
     function shortFingerprint(fingerprint) {
         if (!fingerprint) return '';
         return fingerprint.substring(0, 16).toUpperCase();
