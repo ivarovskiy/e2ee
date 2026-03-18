@@ -1,6 +1,6 @@
 /**
- * static/js/app.js — v2
- * Головний контролер з навігацією, підказками та захистом від крашів.
+ * static/js/app.js — v3
+ * Головний контролер з навігацією, step indicator, circular progress.
  */
 const App = (() => {
     'use strict';
@@ -13,16 +13,16 @@ const App = (() => {
     };
 
     const StateInfo = {
-        [State.IDLE]:            { label: 'Головна',              hint: 'Створіть сесію або приєднайтесь до існуючої' },
-        [State.CREATING]:        { label: 'Підключення...',       hint: 'Зʼєднання з сервером' },
-        [State.WAITING_PARTNER]: { label: 'Очікування партнера',  hint: 'Покажіть QR-код або надішліть посилання' },
-        [State.KEYS_EXCHANGED]:  { label: 'Верифікація ключів',   hint: 'Відскануйте QR з екрану партнера камерою' },
-        [State.VERIFYING]:       { label: 'Сканування...',        hint: 'Наведіть камеру на QR партнера' },
-        [State.VERIFIED]:        { label: 'Готово до передачі',   hint: 'Оберіть файл або очікуйте від партнера' },
-        [State.TRANSFERRING]:    { label: 'Відправка...',         hint: 'Файл шифрується та передається' },
-        [State.RECEIVING]:       { label: 'Отримання...',         hint: 'Файл завантажується' },
-        [State.COMPLETED]:       { label: 'Завершено ✓',          hint: 'Файл успішно передано!' },
-        [State.ERROR]:           { label: 'Помилка',              hint: 'Щось пішло не так' },
+        [State.IDLE]:            { label: 'Головна',              hint: 'Створіть сесію або приєднайтесь до існуючої', step: 0 },
+        [State.CREATING]:        { label: 'Підключення...',       hint: 'З\'єднання з сервером', step: 1 },
+        [State.WAITING_PARTNER]: { label: 'Очікування партнера',  hint: 'Покажіть QR-код або надішліть посилання', step: 1 },
+        [State.KEYS_EXCHANGED]:  { label: 'Верифікація ключів',   hint: 'Відскануйте QR з екрану партнера камерою', step: 3 },
+        [State.VERIFYING]:       { label: 'Сканування...',        hint: 'Наведіть камеру на QR партнера', step: 3 },
+        [State.VERIFIED]:        { label: 'Готово до передачі',   hint: 'Оберіть файл або очікуйте від партнера', step: 4 },
+        [State.TRANSFERRING]:    { label: 'Відправка...',         hint: 'Файл шифрується та передається', step: 4 },
+        [State.RECEIVING]:       { label: 'Отримання...',         hint: 'Файл завантажується', step: 4 },
+        [State.COMPLETED]:       { label: 'Завершено',            hint: 'Файл успішно передано!', step: 4 },
+        [State.ERROR]:           { label: 'Помилка',              hint: 'Щось пішло не так', step: 0 },
     };
 
     let currentState = State.IDLE;
@@ -40,8 +40,26 @@ const App = (() => {
         _registerWSHandlers();
         _setState(State.IDLE);
         _showSection('section-start');
+        _injectProgressGradient();
         const path = window.location.pathname;
         if (path.startsWith('/join/')) { const sid = path.split('/join/')[1]; if (sid) _joinExistingSession(sid); }
+    }
+
+    // ═══ SVG GRADIENT FOR PROGRESS ════════════════════════════════
+    function _injectProgressGradient() {
+        const svg = document.querySelector('.progress-ring');
+        if (!svg) return;
+        const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+        const grad = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+        grad.setAttribute('id', 'progress-gradient');
+        grad.setAttribute('x1', '0%'); grad.setAttribute('y1', '0%');
+        grad.setAttribute('x2', '100%'); grad.setAttribute('y2', '0%');
+        const s1 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+        s1.setAttribute('offset', '0%'); s1.setAttribute('style', 'stop-color:#6187f5');
+        const s2 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+        s2.setAttribute('offset', '100%'); s2.setAttribute('style', 'stop-color:#a78bfa');
+        grad.appendChild(s1); grad.appendChild(s2);
+        defs.appendChild(grad); svg.insertBefore(defs, svg.firstChild);
     }
 
     // ═══ UI BINDING ═════════════════════════════════════════════════
@@ -58,16 +76,13 @@ const App = (() => {
         $('file-input')?.addEventListener('change', _onFileSelected);
         $('btn-copy-link')?.addEventListener('click', _copyJoinLink);
         $('btn-share-link')?.addEventListener('click', _shareJoinLink);
-        // Усі кнопки "назад"
         document.querySelectorAll('.btn-back').forEach(b => b.addEventListener('click', _goBack));
-        // Усі кнопки "нова сесія"
         document.querySelectorAll('.btn-new-session').forEach(b => b.addEventListener('click', _resetToIdle));
-        // Server URL
         $('btn-save-url')?.addEventListener('click', () => {
             const url = $('input-server-url')?.value?.trim();
             if (url && typeof AppConfig !== 'undefined') {
                 AppConfig.setServerUrl(url);
-                const s = $('server-url-status'); if(s) s.textContent = '✓ Збережено';
+                const s = $('server-url-status'); if(s) s.textContent = 'Збережено';
                 _showNotification('Сервер збережено', 'success');
             }
         });
@@ -83,16 +98,16 @@ const App = (() => {
         _resetToIdle();
     }
 
-    // ═══ WEBSOCKET HANDLERS (crash-safe) ════════════════════════════
+    // ═══ WEBSOCKET HANDLERS ═════════════════════════════════════════
     function _registerWSHandlers() {
         WSClient.onOpen(() => { _log('Підключено до сервера'); _sendMyKey(); });
         WSClient.onClose((ev) => {
             if (ev.code !== 1000 && currentState !== State.IDLE) {
-                _log('Зʼєднання втрачено', 'warn');
-                _showNotification('Зʼєднання з сервером втрачено', 'warning');
+                _log('З\'єднання втрачено', 'warn');
+                _showNotification('З\'єднання з сервером втрачено', 'warning');
             }
         });
-        WSClient.onError(() => { if (currentState !== State.IDLE) _log('Помилка зʼєднання', 'error'); });
+        WSClient.onError(() => { if (currentState !== State.IDLE) _log('Помилка з\'єднання', 'error'); });
 
         WSClient.on('SESSION_READY', () => { partnerConnected = true; _log('Обидва підключені'); });
         WSClient.on('PARTNER_CONNECTED', () => {
@@ -120,7 +135,7 @@ const App = (() => {
         });
         WSClient.on('VERIFICATION_STATUS', (d) => {
             partnerVerified = !!d.verified;
-            _log(partnerVerified ? 'Партнер підтвердив ваш ключ ✓' : 'Партнер відхилив', partnerVerified ? 'success' : 'warn');
+            _log(partnerVerified ? 'Партнер підтвердив ваш ключ' : 'Партнер відхилив', partnerVerified ? 'success' : 'warn');
             _checkBothVerified();
         });
         WSClient.on('BOTH_VERIFIED', () => {
@@ -186,13 +201,13 @@ const App = (() => {
         partnerFingerprint = data.fingerprint;
         partnerPublicKey = await CryptoModule.importPartnerKey(data.public_key);
         sharedKey = await CryptoModule.deriveSharedKey(keyPair.privateKey, partnerPublicKey, sessionId);
-        _log('Ключі обмінено ✓'); _setState(State.KEYS_EXCHANGED); _showVerificationUI();
+        _log('Ключі обмінено'); _setState(State.KEYS_EXCHANGED); _showVerificationUI();
     }
 
     // ═══ VERIFICATION ═══════════════════════════════════════════════
     function _showVerificationUI() {
         _showSection('section-verify');
-        const qr = $('my-qr-code'); if (qr && myFingerprint) { qr.innerHTML = ''; QRModule.generateQR(myFingerprint, qr, { size: 180 }); }
+        const qr = $('my-qr-code'); if (qr && myFingerprint) { qr.innerHTML = ''; QRModule.generateQR(myFingerprint, qr, { size: 160 }); }
         const pfp = $('partner-fingerprint'); if (pfp) pfp.textContent = QRModule.formatFingerprint(partnerFingerprint || '');
         const mfp = $('my-fingerprint'); if (mfp) mfp.textContent = QRModule.formatFingerprint(myFingerprint || '');
         _updateVerificationIndicators();
@@ -207,7 +222,7 @@ const App = (() => {
             const match = QRModule.verifyFingerprint(scanned, partnerFingerprint);
             iVerified = match;
             WSClient.sendVerificationStatus(match);
-            if (match) { _log('QR-верифікація ✓', 'success'); _showNotification('Ключ підтверджено!', 'success'); try { NativeBridge.hapticSuccess(); } catch(e){} }
+            if (match) { _log('QR-верифікація пройдена', 'success'); _showNotification('Ключ підтверджено!', 'success'); try { NativeBridge.hapticSuccess(); } catch(e){} }
             else { _log('Ключі НЕ збігаються!', 'error'); _showNotification('НЕБЕЗПЕКА: ключі не збігаються!', 'danger'); try { NativeBridge.hapticError(); } catch(e){} }
             _checkBothVerified();
         } catch (err) {
@@ -227,15 +242,21 @@ const App = (() => {
     function _manualVerify() {
         const ok = confirm('Порівняйте fingerprint партнера:\n\n' + QRModule.formatFingerprint(partnerFingerprint) + '\n\nЗбігається?');
         iVerified = ok; WSClient.sendVerificationStatus(ok);
-        _log(ok ? 'Верифікація ✓' : 'Верифікація відхилена', ok ? 'success' : 'warn');
+        _log(ok ? 'Верифікація пройдена' : 'Верифікація відхилена', ok ? 'success' : 'warn');
         _checkBothVerified();
     }
 
     function _checkBothVerified() { _updateVerificationIndicators(); if (iVerified && partnerVerified) { _setState(State.VERIFIED); _showSection('section-transfer'); } }
     function _updateVerificationIndicators() {
         const m = $('my-verify-status'), p = $('partner-verify-status');
-        if (m) { m.textContent = iVerified ? '✓ Ви' : '○ Ви'; m.className = iVerified ? 'verify-ok' : 'verify-pending'; }
-        if (p) { p.textContent = partnerVerified ? '✓ Партнер' : '○ Партнер'; p.className = partnerVerified ? 'verify-ok' : 'verify-pending'; }
+        if (m) {
+            m.className = iVerified ? 'verify-chip verify-ok' : 'verify-chip verify-pending';
+            const span = m.querySelector('span'); if (span) span.textContent = iVerified ? 'Ви (ok)' : 'Ви';
+        }
+        if (p) {
+            p.className = partnerVerified ? 'verify-chip verify-ok' : 'verify-chip verify-pending';
+            const span = p.querySelector('span'); if (span) span.textContent = partnerVerified ? 'Партнер (ok)' : 'Партнер';
+        }
     }
 
     // ═══ FILE TRANSFER ══════════════════════════════════════════════
@@ -292,7 +313,48 @@ const App = (() => {
     }
 
     // ═══ STATE / UI ═════════════════════════════════════════════════
-    function _setState(s) { currentState = s; const info = StateInfo[s] || {}; const el = $('current-state'); if (el) { el.textContent = info.label||s; el.className = 'state-badge state-' + s.toLowerCase(); } const h = $('current-hint'); if (h) h.textContent = info.hint||''; }
+    function _setState(s) {
+        currentState = s;
+        const info = StateInfo[s] || {};
+
+        // Update state badge
+        const el = $('current-state');
+        if (el) {
+            el.textContent = info.label || s;
+            el.className = 'state-badge state-' + s.toLowerCase();
+        }
+
+        // Update hint
+        const h = $('current-hint');
+        if (h) h.textContent = info.hint || '';
+
+        // Update step indicator
+        _updateStepIndicator(info.step || 0);
+    }
+
+    function _updateStepIndicator(activeStep) {
+        const indicator = $('step-indicator');
+        if (!indicator) return;
+
+        // Show/hide step indicator
+        indicator.style.display = activeStep > 0 ? 'flex' : 'none';
+
+        const steps = indicator.querySelectorAll('.step');
+        const lines = indicator.querySelectorAll('.step-line');
+
+        steps.forEach((step, i) => {
+            const stepNum = i + 1;
+            step.classList.remove('active', 'done');
+            if (stepNum < activeStep) step.classList.add('done');
+            else if (stepNum === activeStep) step.classList.add('active');
+        });
+
+        lines.forEach((line, i) => {
+            line.classList.remove('done');
+            if (i + 1 < activeStep) line.classList.add('done');
+        });
+    }
+
     function _resetToIdle() {
         try { QRModule.stopScanning(); } catch(e) {} try { WSClient.disconnect('user_back'); } catch(e) {}
         keyPair=null; myPublicKeyB64=null; myFingerprint=null; partnerPublicKey=null; partnerFingerprint=null;
@@ -303,21 +365,52 @@ const App = (() => {
     }
 
     function _displayJoinInfo(data) {
-        const qr = $('session-qr'); if (qr) { qr.innerHTML = ''; QRModule.generateQR(data.join_url, qr, { size: 200 }); }
+        const qr = $('session-qr'); if (qr) { qr.innerHTML = ''; QRModule.generateQR(data.join_url, qr, { size: 180 }); }
         const url = $('join-url'); if (url) { url.textContent = data.join_url; url.dataset.url = data.join_url; }
         const sid = $('display-session-id'); if (sid) sid.textContent = data.session_id;
     }
     function _copyJoinLink() { const u = $('join-url')?.dataset?.url; if (u) { try { navigator.clipboard.writeText(u); } catch(e) { try { NativeBridge.copyToClipboard(u); } catch(e2){} } _showNotification('Скопійовано!', 'success'); } }
-    function _shareJoinLink() { const u = $('join-url')?.dataset?.url; if (u && navigator.share) navigator.share({ title: 'SFT', url: u }).catch(()=>{}); else _copyJoinLink(); }
+    function _shareJoinLink() { const u = $('join-url')?.dataset?.url; if (u && navigator.share) navigator.share({ title: 'SecureDrop', url: u }).catch(()=>{}); else _copyJoinLink(); }
 
-    function _updateProgress(f, l) { const b = $('progress-bar'); if (b) b.style.width = `${Math.round(f*100)}%`; const t = $('progress-text'); if (t) t.textContent = l||''; }
+    function _updateProgress(f, l) {
+        const pct = Math.round(f * 100);
+
+        // Linear bar
+        const b = $('progress-bar');
+        if (b) b.style.width = `${pct}%`;
+
+        // Text label
+        const t = $('progress-text');
+        if (t) t.textContent = l || '';
+
+        // Percent display
+        const pp = $('progress-percent');
+        if (pp) pp.textContent = `${pct}%`;
+
+        // Circular ring
+        const ring = $('progress-ring-fill');
+        if (ring) {
+            const circumference = 2 * Math.PI * 52; // r=52
+            const offset = circumference - (f * circumference);
+            ring.style.strokeDashoffset = offset;
+        }
+    }
+
     function _showSection(id) { document.querySelectorAll('.app-section').forEach(s => s.classList.remove('active')); $(id)?.classList.add('active'); }
     function _showElement(id) { const e = $(id); if (e) e.style.display = ''; }
     function _hideElement(id) { const e = $(id); if (e) e.style.display = 'none'; }
     function _showNotification(text, type) {
         const c = $('notifications'); if (!c) return;
-        const el = document.createElement('div'); el.className = `notification notification-${type||'info'}`; el.textContent = text;
-        el.addEventListener('click', () => el.remove()); c.prepend(el); setTimeout(() => { try { el.remove(); } catch(e){} }, 6000);
+        const el = document.createElement('div');
+        el.className = `notification notification-${type||'info'}`;
+        el.textContent = text;
+        el.addEventListener('click', () => {
+            el.style.opacity = '0';
+            el.style.transform = 'translateY(-8px)';
+            setTimeout(() => { try { el.remove(); } catch(e){} }, 200);
+        });
+        c.prepend(el);
+        setTimeout(() => { try { el.style.opacity = '0'; el.style.transform = 'translateY(-8px)'; setTimeout(() => { try { el.remove(); } catch(e){} }, 200); } catch(e){} }, 5000);
     }
     function _log(msg, level) {
         const el = $('activity-log'); if (!el) return;
@@ -330,7 +423,7 @@ const App = (() => {
         const card = $('card-server-url'); if (!card) return;
         if (native || window.location.protocol === 'file:' || window.location.protocol === 'capacitor:') {
             card.style.display = ''; const saved = typeof AppConfig !== 'undefined' ? AppConfig.getServerUrl() : null;
-            if (saved) { const i = $('input-server-url'); if (i) i.value = saved; const s = $('server-url-status'); if (s) s.textContent = '✓ ' + saved; }
+            if (saved) { const i = $('input-server-url'); if (i) i.value = saved; const s = $('server-url-status'); if (s) s.textContent = saved; }
         }
     }
 
