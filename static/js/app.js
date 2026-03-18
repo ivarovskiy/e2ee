@@ -1,792 +1,339 @@
 /**
- * static/js/app.js
- * Головний контролер застосунку.
- *
- * Реалізує State Machine клієнтської сесії (Таблиця 3.9 звіту):
- *   IDLE → KEYS_GENERATED → KEYS_EXCHANGED → VERIFIED → TRANSFERRING → COMPLETED
- *
- * Оркеструє:
- *   - CryptoModule (шифрування)
- *   - WSClient (WebSocket)
- *   - QRModule (верифікація ключів)
- *   - FileHandler (обробка файлів)
+ * static/js/app.js — v2
+ * Головний контролер з навігацією, підказками та захистом від крашів.
  */
-
 const App = (() => {
     'use strict';
 
-    // ── Стани клієнтської сесії ────────────────────────────────────
-
     const State = {
-        IDLE: 'IDLE',
-        CREATING_SESSION: 'CREATING_SESSION',
-        WAITING_PARTNER: 'WAITING_PARTNER',
-        KEYS_GENERATED: 'KEYS_GENERATED',
-        KEYS_EXCHANGED: 'KEYS_EXCHANGED',
-        VERIFYING: 'VERIFYING',
-        VERIFIED: 'VERIFIED',
-        TRANSFERRING: 'TRANSFERRING',
-        RECEIVING: 'RECEIVING',
-        COMPLETED: 'COMPLETED',
-        ERROR: 'ERROR',
+        IDLE: 'IDLE', CREATING: 'CREATING', WAITING_PARTNER: 'WAITING_PARTNER',
+        KEYS_EXCHANGED: 'KEYS_EXCHANGED', VERIFYING: 'VERIFYING', VERIFIED: 'VERIFIED',
+        TRANSFERRING: 'TRANSFERRING', RECEIVING: 'RECEIVING',
+        COMPLETED: 'COMPLETED', ERROR: 'ERROR',
     };
 
-    // ── Внутрішній стан ────────────────────────────────────────────
+    const StateInfo = {
+        [State.IDLE]:            { label: 'Головна',              hint: 'Створіть сесію або приєднайтесь до існуючої' },
+        [State.CREATING]:        { label: 'Підключення...',       hint: 'Зʼєднання з сервером' },
+        [State.WAITING_PARTNER]: { label: 'Очікування партнера',  hint: 'Покажіть QR-код або надішліть посилання' },
+        [State.KEYS_EXCHANGED]:  { label: 'Верифікація ключів',   hint: 'Відскануйте QR з екрану партнера камерою' },
+        [State.VERIFYING]:       { label: 'Сканування...',        hint: 'Наведіть камеру на QR партнера' },
+        [State.VERIFIED]:        { label: 'Готово до передачі',   hint: 'Оберіть файл або очікуйте від партнера' },
+        [State.TRANSFERRING]:    { label: 'Відправка...',         hint: 'Файл шифрується та передається' },
+        [State.RECEIVING]:       { label: 'Отримання...',         hint: 'Файл завантажується' },
+        [State.COMPLETED]:       { label: 'Завершено ✓',          hint: 'Файл успішно передано!' },
+        [State.ERROR]:           { label: 'Помилка',              hint: 'Щось пішло не так' },
+    };
 
     let currentState = State.IDLE;
-    let sessionId = null;
-    let myRole = null;
-    let keyPair = null;
-    let myPublicKeyB64 = null;
-    let myFingerprint = null;
-    let partnerPublicKey = null;
-    let partnerFingerprint = null;
-    let sharedKey = null;
-    let partnerVerified = false;
-    let iVerified = false;
-    let chunkCollector = null;
-    let incomingFileMetadata = null;
-
-    // ── DOM-елементи ───────────────────────────────────────────────
+    let sessionId = null, myRole = null, keyPair = null;
+    let myPublicKeyB64 = null, myFingerprint = null;
+    let partnerPublicKey = null, partnerFingerprint = null;
+    let sharedKey = null, partnerVerified = false, iVerified = false;
+    let chunkCollector = null, incomingFileMetadata = null, partnerConnected = false;
 
     const $ = (id) => document.getElementById(id);
 
-    // ── Ініціалізація ──────────────────────────────────────────────
-
+    // ═══ INIT ═══════════════════════════════════════════════════════
     function init() {
         _bindUI();
         _registerWSHandlers();
         _setState(State.IDLE);
-        console.log('[App] Initialized');
-
-        // Перевіряємо чи це join-URL
+        _showSection('section-start');
         const path = window.location.pathname;
-        if (path.startsWith('/join/')) {
-            const sid = path.split('/join/')[1];
-            if (sid) {
-                sessionId = sid;
-                _joinExistingSession(sid);
-            }
-        }
+        if (path.startsWith('/join/')) { const sid = path.split('/join/')[1]; if (sid) _joinExistingSession(sid); }
     }
 
-    // ── UI Binding ─────────────────────────────────────────────────
-
+    // ═══ UI BINDING ═════════════════════════════════════════════════
     function _bindUI() {
-        // Кнопка "Створити сесію"
         $('btn-create')?.addEventListener('click', _createSession);
-
-        // Кнопка "Приєднатись" (ввід session ID)
         $('btn-join')?.addEventListener('click', () => {
             const sid = $('input-session-id')?.value?.trim();
-            if (sid) _joinExistingSession(sid);
+            if (!sid) { _showNotification('Введіть ID сесії', 'warning'); return; }
+            _joinExistingSession(sid);
         });
-
-        // Кнопка "Сканувати QR партнера"
         $('btn-scan-qr')?.addEventListener('click', _startQRVerification);
-
-        // Кнопка "Зупинити сканування"
         $('btn-stop-scan')?.addEventListener('click', _stopQRScan);
-
-        // Input файлу
-        $('file-input')?.addEventListener('change', _onFileSelected);
-
-        // Кнопка "Нова сесія"
-        $('btn-new-session')?.addEventListener('click', _resetToIdle);
-
-        // Ручна верифікація (порівняння тексту)
         $('btn-manual-verify')?.addEventListener('click', _manualVerify);
-
-        // Налаштування URL сервера (для нативної апки)
+        $('file-input')?.addEventListener('change', _onFileSelected);
+        $('btn-copy-link')?.addEventListener('click', _copyJoinLink);
+        $('btn-share-link')?.addEventListener('click', _shareJoinLink);
+        // Усі кнопки "назад"
+        document.querySelectorAll('.btn-back').forEach(b => b.addEventListener('click', _goBack));
+        // Усі кнопки "нова сесія"
+        document.querySelectorAll('.btn-new-session').forEach(b => b.addEventListener('click', _resetToIdle));
+        // Server URL
         $('btn-save-url')?.addEventListener('click', () => {
             const url = $('input-server-url')?.value?.trim();
             if (url && typeof AppConfig !== 'undefined') {
                 AppConfig.setServerUrl(url);
-                const statusEl = $('server-url-status');
-                if (statusEl) statusEl.textContent = '✓ Збережено: ' + url;
-                _log(`Relay-сервер: ${url}`);
+                const s = $('server-url-status'); if(s) s.textContent = '✓ Збережено';
+                _showNotification('Сервер збережено', 'success');
             }
         });
-
-        // Показуємо карточку URL тільки у нативній апці або коли не на сервері
         _initServerUrlCard();
     }
 
-    function _initServerUrlCard() {
-        const isNative = typeof AppConfig !== 'undefined' && AppConfig.isNative();
-        const card = $('card-server-url');
-        if (!card) return;
-
-        // Показуємо на Android/iOS або якщо сторінка відкрита не з сервера
-        if (isNative || window.location.protocol === 'file:' || window.location.protocol === 'capacitor:') {
-            card.style.display = '';
-            const input = $('input-server-url');
-            const statusEl = $('server-url-status');
-            if (typeof AppConfig !== 'undefined') {
-                const saved = AppConfig.getServerUrl();
-                if (saved && input) input.value = saved;
-                if (saved && statusEl) statusEl.textContent = '✓ Підключено до: ' + saved;
-            }
+    // ═══ BACK NAVIGATION ════════════════════════════════════════════
+    function _goBack() {
+        try { QRModule.stopScanning(); } catch(e) {}
+        if (currentState === State.TRANSFERRING || currentState === State.RECEIVING) {
+            if (!confirm('Передача не завершена. Скасувати?')) return;
         }
+        _resetToIdle();
     }
 
-    // ── WebSocket handlers ─────────────────────────────────────────
-
+    // ═══ WEBSOCKET HANDLERS (crash-safe) ════════════════════════════
     function _registerWSHandlers() {
-        WSClient.onOpen(() => {
-            _log('Підключено до relay-сервера');
-            _sendMyKey();
+        WSClient.onOpen(() => { _log('Підключено до сервера'); _sendMyKey(); });
+        WSClient.onClose((ev) => {
+            if (ev.code !== 1000 && currentState !== State.IDLE) {
+                _log('Зʼєднання втрачено', 'warn');
+                _showNotification('Зʼєднання з сервером втрачено', 'warning');
+            }
         });
+        WSClient.onError(() => { if (currentState !== State.IDLE) _log('Помилка зʼєднання', 'error'); });
 
-        WSClient.onClose((event) => {
-            if (event.code !== 1000) {
-                _log('Зʼєднання з сервером втрачено', 'warn');
+        WSClient.on('SESSION_READY', () => { partnerConnected = true; _log('Обидва підключені'); });
+        WSClient.on('PARTNER_CONNECTED', () => {
+            partnerConnected = true;
+            _log('Партнер приєднався');
+            _showNotification('Партнер приєднався!', 'success');
+        });
+        WSClient.on('PARTNER_DISCONNECTED', () => {
+            partnerConnected = false; _log('Партнер від\'єднався', 'warn');
+            if (currentState === State.TRANSFERRING || currentState === State.RECEIVING) {
+                _showNotification('Партнер від\'єднався під час передачі!', 'danger');
+                chunkCollector = null; incomingFileMetadata = null;
+                _setState(State.ERROR); _showSection('section-error');
+            } else if (currentState === State.KEYS_EXCHANGED || currentState === State.VERIFYING) {
+                _showNotification('Партнер від\'єднався', 'warning');
+                _setState(State.ERROR); _showSection('section-error');
+            } else if (currentState !== State.IDLE && currentState !== State.WAITING_PARTNER) {
+                _showNotification('Партнер від\'єднався', 'warning');
             }
         });
 
-        WSClient.onError(() => {
-            _log('Помилка зʼєднання з сервером', 'error');
-        });
-
-        // SESSION_READY
-        WSClient.on('SESSION_READY', (data) => {
-            _log('Обидва учасники підключені');
-        });
-
-        // PARTNER_CONNECTED
-        WSClient.on('PARTNER_CONNECTED', (data) => {
-            _log('Партнер приєднався до сесії');
-            _showSection('section-keys');
-        });
-
-        // PARTNER_DISCONNECTED
-        WSClient.on('PARTNER_DISCONNECTED', (data) => {
-            _log('Партнер від\'єднався', 'warn');
-            _showNotification('Партнер від\'єднався від сесії', 'warning');
-        });
-
-        // KEY_RELAY — отримали публічний ключ партнера
         WSClient.on('KEY_RELAY', async (data) => {
-            await _handlePartnerKey(data);
+            try { await _handlePartnerKey(data); }
+            catch (e) { _log(`Помилка ключа: ${e.message}`, 'error'); _setState(State.ERROR); _showSection('section-error'); }
         });
-
-        // VERIFICATION_STATUS — партнер повідомив про верифікацію
-        WSClient.on('VERIFICATION_STATUS', (data) => {
-            partnerVerified = data.verified;
-            _log(`Партнер ${data.verified ? 'підтвердив' : 'відхилив'} верифікацію`);
+        WSClient.on('VERIFICATION_STATUS', (d) => {
+            partnerVerified = !!d.verified;
+            _log(partnerVerified ? 'Партнер підтвердив ваш ключ ✓' : 'Партнер відхилив', partnerVerified ? 'success' : 'warn');
             _checkBothVerified();
         });
-
-        // BOTH_VERIFIED — обидва верифіковані
-        WSClient.on('BOTH_VERIFIED', (data) => {
-            _setState(State.VERIFIED);
-            _log('Обидва учасники верифіковані — передача дозволена!', 'success');
+        WSClient.on('BOTH_VERIFIED', () => {
+            _setState(State.VERIFIED); _showNotification('Верифікація пройдена!', 'success');
             _showSection('section-transfer');
         });
-
-        // FILE_METADATA — отримуємо метадані файлу
-        WSClient.on('FILE_METADATA', (data) => {
-            _handleIncomingFileMetadata(data);
+        WSClient.on('FILE_METADATA', (d) => { try { _handleIncomingFileMetadata(d); } catch(e) { _log(`Помилка: ${e.message}`, 'error'); } });
+        WSClient.on('FILE_CHUNK', (d) => { try { _handleIncomingChunk(d); } catch(e) {} });
+        WSClient.on('FILE_COMPLETE', async (d) => { try { await _handleFileComplete(); } catch(e) { _log(`Помилка: ${e.message}`, 'error'); _setState(State.VERIFIED); _showSection('section-transfer'); } });
+        WSClient.on('FILE_ACK', (d) => {
+            if (d.success) { _log('Партнер отримав файл!', 'success'); _showNotification('Файл доставлено!', 'success'); _setState(State.COMPLETED); _showSection('section-completed'); }
+            else { _log(`Помилка у партнера: ${d.error_code||'?'}`, 'error'); _showNotification('Партнер не зміг розшифрувати', 'danger'); _setState(State.VERIFIED); _showSection('section-transfer'); }
         });
-
-        // FILE_CHUNK — отримуємо фрагмент файлу
-        WSClient.on('FILE_CHUNK', (data) => {
-            _handleIncomingChunk(data);
-        });
-
-        // FILE_COMPLETE — передача завершена
-        WSClient.on('FILE_COMPLETE', (data) => {
-            _handleFileComplete(data);
-        });
-
-        // FILE_ACK — підтвердження від отримувача
-        WSClient.on('FILE_ACK', (data) => {
-            if (data.success) {
-                _log('Файл успішно отримано партнером!', 'success');
-                _setState(State.COMPLETED);
-            } else {
-                _log(`Помилка на стороні партнера: ${data.error_code}`, 'error');
-            }
-        });
-
-        // SESSION_CLOSE
-        WSClient.on('SESSION_CLOSE', (data) => {
-            _log(`Сесію закрито: ${data.reason}`, 'warn');
-            _setState(State.IDLE);
-        });
-
-        // ERROR
-        WSClient.on('ERROR', (data) => {
-            _log(`Помилка сервера: ${data.message}`, 'error');
-            if (data.fatal) {
-                _setState(State.ERROR);
-            }
+        WSClient.on('SESSION_CLOSE', (d) => { _log(`Сесію закрито: ${d?.reason||''}`, 'warn'); _showNotification('Сесію закрито', 'warning'); _resetToIdle(); });
+        WSClient.on('ERROR', (d) => {
+            _log(`Сервер: ${d?.message||'помилка'}`, 'error'); _showNotification(d?.message||'Помилка сервера', 'danger');
+            if (d?.fatal) { _setState(State.ERROR); _showSection('section-error'); }
         });
     }
 
-    // ── Створення нової сесії ──────────────────────────────────────
-
+    // ═══ SESSION ═════════════════════════════════════════════════════
     async function _createSession() {
-        _setState(State.CREATING_SESSION);
-
-        // У нативній апці — перевіряємо наявність URL сервера
         if (typeof AppConfig !== 'undefined' && AppConfig.isNative() && !AppConfig.getServerUrl()) {
-            const url = prompt('Введіть URL relay-сервера:', 'https://');
-            if (!url) { _setState(State.IDLE); return; }
-            AppConfig.setServerUrl(url);
+            _showNotification('Спочатку вкажіть URL relay-сервера', 'warning'); return;
         }
-
-        _log('Створення нової сесії...');
-
+        _setState(State.CREATING); _log('Створення сесії...');
         try {
-            // Генеруємо ключову пару
             keyPair = await CryptoModule.generateKeyPair();
             myPublicKeyB64 = await CryptoModule.exportPublicKey(keyPair.publicKey);
             myFingerprint = await CryptoModule.computeFingerprint(keyPair.publicKey);
-
-            _log(`Ключі згенеровано. Fingerprint: ${QRModule.shortFingerprint(myFingerprint)}`);
-
-            // Створюємо сесію на сервері
-            const apiUrl = typeof AppConfig !== 'undefined'
-                ? AppConfig.getApiUrl('/api/sessions')
-                : '/api/sessions';
+            const apiUrl = typeof AppConfig !== 'undefined' ? AppConfig.getApiUrl('/api/sessions') : '/api/sessions';
             const resp = await fetch(apiUrl, { method: 'POST' });
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-            const data = await resp.json();
-            sessionId = data.session_id;
-
-            _log(`Сесія створена: ${sessionId.substring(0, 8)}...`);
-
-            // Показуємо QR для приєднання та URL
-            _displayJoinInfo(data);
-            _setState(State.WAITING_PARTNER);
-
-            // Підключаємось по WebSocket
-            myRole = 'initiator';
-            WSClient.connect(sessionId, myRole);
-
+            if (!resp.ok) throw new Error(`Сервер: HTTP ${resp.status}`);
+            const data = await resp.json(); sessionId = data.session_id;
+            _displayJoinInfo(data); _setState(State.WAITING_PARTNER); _showSection('section-waiting');
+            myRole = 'initiator'; WSClient.connect(sessionId, myRole);
         } catch (err) {
-            _log(`Помилка створення сесії: ${err.message}`, 'error');
-            _setState(State.ERROR);
+            _log(`Помилка: ${err.message}`, 'error'); _showNotification(`Не вдалось: ${err.message}`, 'danger');
+            _setState(State.ERROR); _showSection('section-error');
         }
     }
-
-    // ── Приєднання до існуючої сесії ───────────────────────────────
 
     async function _joinExistingSession(sid) {
-        _setState(State.CREATING_SESSION);
-        sessionId = sid;
-        _log(`Приєднання до сесії ${sid.substring(0, 8)}...`);
-
+        if (typeof AppConfig !== 'undefined' && AppConfig.isNative() && !AppConfig.getServerUrl()) {
+            _showNotification('Спочатку вкажіть URL relay-сервера', 'warning'); return;
+        }
+        _setState(State.CREATING); sessionId = sid; _log(`Приєднання до ${sid.substring(0,8)}...`);
         try {
-            // Генеруємо ключову пару
             keyPair = await CryptoModule.generateKeyPair();
             myPublicKeyB64 = await CryptoModule.exportPublicKey(keyPair.publicKey);
             myFingerprint = await CryptoModule.computeFingerprint(keyPair.publicKey);
-
-            _log(`Ключі згенеровано. Fingerprint: ${QRModule.shortFingerprint(myFingerprint)}`);
-
-            // Підключаємось як joiner
-            myRole = 'joiner';
-            WSClient.connect(sessionId, myRole);
-            _setState(State.KEYS_GENERATED);
-
+            myRole = 'joiner'; WSClient.connect(sessionId, myRole);
+            _setState(State.WAITING_PARTNER); _showSection('section-joining');
         } catch (err) {
-            _log(`Помилка приєднання: ${err.message}`, 'error');
-            _setState(State.ERROR);
+            _log(`Помилка: ${err.message}`, 'error'); _showNotification('Не вдалось приєднатись', 'danger');
+            _setState(State.ERROR); _showSection('section-error');
         }
     }
 
-    // ── Відправка свого ключа ──────────────────────────────────────
-
-    function _sendMyKey() {
-        if (myPublicKeyB64 && myFingerprint) {
-            WSClient.sendKeyExchange(myPublicKeyB64, myFingerprint);
-            _log('Публічний ключ відправлено');
-        }
-    }
-
-    // ── Обробка ключа партнера ─────────────────────────────────────
+    function _sendMyKey() { if (myPublicKeyB64 && myFingerprint) { WSClient.sendKeyExchange(myPublicKeyB64, myFingerprint); _log('Ключ відправлено'); } }
 
     async function _handlePartnerKey(data) {
-        try {
-            partnerFingerprint = data.fingerprint;
-            partnerPublicKey = await CryptoModule.importPartnerKey(data.public_key);
-
-            // Деривація спільного ключа (ECDH + HKDF)
-            sharedKey = await CryptoModule.deriveSharedKey(
-                keyPair.privateKey,
-                partnerPublicKey,
-                sessionId
-            );
-
-            _log(`Ключ партнера отримано. Fingerprint: ${QRModule.shortFingerprint(partnerFingerprint)}`);
-            _log('Спільний ключ шифрування деривовано (ECDH + HKDF)');
-
-            _setState(State.KEYS_EXCHANGED);
-
-            // Показуємо секцію верифікації
-            _showVerificationUI();
-
-        } catch (err) {
-            _log(`Помилка обробки ключа партнера: ${err.message}`, 'error');
-        }
+        partnerFingerprint = data.fingerprint;
+        partnerPublicKey = await CryptoModule.importPartnerKey(data.public_key);
+        sharedKey = await CryptoModule.deriveSharedKey(keyPair.privateKey, partnerPublicKey, sessionId);
+        _log('Ключі обмінено ✓'); _setState(State.KEYS_EXCHANGED); _showVerificationUI();
     }
 
-    // ── UI верифікації ──────────────────────────────────────────────
-
+    // ═══ VERIFICATION ═══════════════════════════════════════════════
     function _showVerificationUI() {
         _showSection('section-verify');
-
-        // Генеруємо QR мого fingerprint (партнер сканує)
-        const qrContainer = $('my-qr-code');
-        if (qrContainer && myFingerprint) {
-            QRModule.generateQR(myFingerprint, qrContainer, { size: 180 });
-        }
-
-        // Відображаємо fingerprint партнера (для ручної перевірки)
-        const partnerFpEl = $('partner-fingerprint');
-        if (partnerFpEl && partnerFingerprint) {
-            partnerFpEl.textContent = QRModule.formatFingerprint(partnerFingerprint);
-        }
-
-        // Мій fingerprint (для показу партнеру)
-        const myFpEl = $('my-fingerprint');
-        if (myFpEl && myFingerprint) {
-            myFpEl.textContent = QRModule.formatFingerprint(myFingerprint);
-        }
+        const qr = $('my-qr-code'); if (qr && myFingerprint) { qr.innerHTML = ''; QRModule.generateQR(myFingerprint, qr, { size: 180 }); }
+        const pfp = $('partner-fingerprint'); if (pfp) pfp.textContent = QRModule.formatFingerprint(partnerFingerprint || '');
+        const mfp = $('my-fingerprint'); if (mfp) mfp.textContent = QRModule.formatFingerprint(myFingerprint || '');
+        _updateVerificationIndicators();
     }
 
-    // ── QR-сканування ──────────────────────────────────────────────
-
     async function _startQRVerification() {
-        if (!QRModule.isCameraSupported()) {
-            _log('Камера не підтримується. Використовуйте ручну верифікацію.', 'warn');
-            return;
-        }
-
+        if (!QRModule.isCameraSupported()) { _showNotification('Камера не доступна', 'warning'); return; }
         _setState(State.VERIFYING);
-        _log('Скануйте QR-код з екрану пристрою партнера...');
-
-        _showElement('scanner-container');
-        _hideElement('btn-scan-qr');
-        _showElement('btn-stop-scan');
-
-        const video = $('scanner-video');
-        const canvas = $('scanner-canvas');
-
+        _showElement('scanner-container'); _hideElement('btn-scan-qr'); _hideElement('btn-manual-verify'); _showElement('btn-stop-scan');
         try {
-            const scannedData = await QRModule.startScanning(video, canvas);
-
-            // Порівнюємо
-            const match = QRModule.verifyFingerprint(scannedData, partnerFingerprint);
-
-            if (match) {
-                iVerified = true;
-                WSClient.sendVerificationStatus(true);
-                _log('QR-верифікація успішна! Fingerprint збігається.', 'success');
-                _showNotification('Ключ партнера підтверджено!', 'success');
-            } else {
-                iVerified = false;
-                WSClient.sendVerificationStatus(false);
-                _log('УВАГА: Fingerprint НЕ збігається! Можлива MITM-атака!', 'error');
-                _showNotification('НЕБЕЗПЕКА: Ключі не збігаються! Можлива атака!', 'danger');
-                _setState(State.KEYS_EXCHANGED);
-            }
-
+            const scanned = await QRModule.startScanning($('scanner-video'), $('scanner-canvas'));
+            const match = QRModule.verifyFingerprint(scanned, partnerFingerprint);
+            iVerified = match;
+            WSClient.sendVerificationStatus(match);
+            if (match) { _log('QR-верифікація ✓', 'success'); _showNotification('Ключ підтверджено!', 'success'); try { NativeBridge.hapticSuccess(); } catch(e){} }
+            else { _log('Ключі НЕ збігаються!', 'error'); _showNotification('НЕБЕЗПЕКА: ключі не збігаються!', 'danger'); try { NativeBridge.hapticError(); } catch(e){} }
             _checkBothVerified();
-
         } catch (err) {
-            _log(`Помилка сканування: ${err.message}`, 'error');
-            _setState(State.KEYS_EXCHANGED);
+            if (err.message !== 'Сканування зупинено') { _log(`Камера: ${err.message}`, 'warn'); _showNotification(err.message, 'warning'); }
         } finally {
-            _hideElement('scanner-container');
-            _showElement('btn-scan-qr');
-            _hideElement('btn-stop-scan');
+            _hideElement('scanner-container'); _showElement('btn-scan-qr'); _showElement('btn-manual-verify'); _hideElement('btn-stop-scan');
+            if (currentState === State.VERIFYING) _setState(State.KEYS_EXCHANGED);
         }
     }
 
     function _stopQRScan() {
-        QRModule.stopScanning();
-        _hideElement('scanner-container');
-        _showElement('btn-scan-qr');
-        _hideElement('btn-stop-scan');
+        try { QRModule.stopScanning(); } catch(e) {}
+        _hideElement('scanner-container'); _showElement('btn-scan-qr'); _showElement('btn-manual-verify'); _hideElement('btn-stop-scan');
         _setState(State.KEYS_EXCHANGED);
     }
 
-    // ── Ручна верифікація ──────────────────────────────────────────
-
     function _manualVerify() {
-        const confirmed = confirm(
-            `Порівняйте fingerprint партнера через безпечний канал:\n\n` +
-            `${QRModule.formatFingerprint(partnerFingerprint)}\n\n` +
-            `Fingerprint збігається?`
-        );
-
-        if (confirmed) {
-            iVerified = true;
-            WSClient.sendVerificationStatus(true);
-            _log('Ручна верифікація підтверджена', 'success');
-        } else {
-            iVerified = false;
-            WSClient.sendVerificationStatus(false);
-            _log('Ручна верифікація відхилена', 'warn');
-        }
+        const ok = confirm('Порівняйте fingerprint партнера:\n\n' + QRModule.formatFingerprint(partnerFingerprint) + '\n\nЗбігається?');
+        iVerified = ok; WSClient.sendVerificationStatus(ok);
+        _log(ok ? 'Верифікація ✓' : 'Верифікація відхилена', ok ? 'success' : 'warn');
         _checkBothVerified();
     }
 
-    // ── Перевірка обох верифікацій ──────────────────────────────────
-
-    function _checkBothVerified() {
-        if (iVerified && partnerVerified) {
-            _setState(State.VERIFIED);
-            _showSection('section-transfer');
-            _log('Обидва учасники верифіковані!', 'success');
-        }
-
-        // Оновлюємо індикатори
-        _updateVerificationIndicators();
+    function _checkBothVerified() { _updateVerificationIndicators(); if (iVerified && partnerVerified) { _setState(State.VERIFIED); _showSection('section-transfer'); } }
+    function _updateVerificationIndicators() {
+        const m = $('my-verify-status'), p = $('partner-verify-status');
+        if (m) { m.textContent = iVerified ? '✓ Ви' : '○ Ви'; m.className = iVerified ? 'verify-ok' : 'verify-pending'; }
+        if (p) { p.textContent = partnerVerified ? '✓ Партнер' : '○ Партнер'; p.className = partnerVerified ? 'verify-ok' : 'verify-pending'; }
     }
 
-    // ── Відправка файлу ────────────────────────────────────────────
-
+    // ═══ FILE TRANSFER ══════════════════════════════════════════════
     async function _onFileSelected(e) {
-        const file = e.target.files[0];
-        if (!file) return;
-
-        // Валідація
-        const validation = FileHandler.validateFile(file);
-        if (!validation.valid) {
-            _log(validation.error, 'error');
-            return;
-        }
-
-        if (currentState !== State.VERIFIED) {
-            _log('Верифікація не завершена!', 'error');
-            return;
-        }
-
-        _setState(State.TRANSFERRING);
-        _log(`Підготовка файлу: ${file.name} (${FileHandler.formatFileSize(file.size)})...`);
-        _updateProgress(0, 'Зчитування файлу...');
-
+        const file = e.target.files?.[0]; if (!file) return;
+        const v = FileHandler.validateFile(file); if (!v.valid) { _showNotification(v.error, 'warning'); return; }
+        if (!partnerConnected) { _showNotification('Партнер не підключений', 'warning'); return; }
+        _setState(State.TRANSFERRING); _showSection('section-progress'); _updateProgress(0, 'Зчитування...');
+        _log(`Файл: ${file.name} (${FileHandler.formatFileSize(file.size)})`);
         try {
-            // Зчитуємо файл
-            const plaintext = await FileHandler.readFile(file, (p) => {
-                _updateProgress(p * 0.2, 'Зчитування файлу...');
-            });
+            const pt = await FileHandler.readFile(file, p => _updateProgress(p * 0.2, 'Зчитування...'));
+            const sha = await CryptoModule.sha256Hex(pt);
+            _updateProgress(0.2, 'Шифрування...'); const { nonce, ciphertext } = await CryptoModule.encryptFile(sharedKey, pt);
+            _updateProgress(0.4, 'Відправка...'); const chunks = CryptoModule.splitIntoChunks(ciphertext);
+            await WSClient.sendFile({ filename: file.name, originalSize: file.size, nonceB64: CryptoModule.arrayBufferToBase64(nonce), contentType: file.type }, chunks, '', sha,
+                (p, s, t) => _updateProgress(0.4 + p * 0.6, `${s}/${t} фрагментів`));
+            _updateProgress(1, 'Очікуємо підтвердження...'); _log('Відправлено, очікуємо...');
+        } catch (err) { _log(`Помилка: ${err.message}`, 'error'); _showNotification('Помилка відправки', 'danger'); _setState(State.VERIFIED); _showSection('section-transfer'); }
+        e.target.value = '';
+    }
 
-            // SHA-256 оригіналу
-            const sha256 = await CryptoModule.sha256Hex(plaintext);
-            _log(`SHA-256 оригіналу: ${sha256.substring(0, 16)}...`);
+    function _handleIncomingFileMetadata(d) {
+        if (!sharedKey) return;
+        incomingFileMetadata = { filename: d.filename, originalSize: d.original_size, totalChunks: d.chunk_count, nonceB64: d.nonce, contentType: d.content_type };
+        _setState(State.RECEIVING); _showSection('section-progress');
+        _log(`Отримуємо: ${d.filename} (${FileHandler.formatFileSize(d.original_size)})`);
+        chunkCollector = FileHandler.createChunkCollector(d.chunk_count, (p, r, t) => _updateProgress(p * 0.7, `${r}/${t} фрагментів`));
+    }
 
-            // Шифрування
-            _updateProgress(0.2, 'Шифрування (AES-256-GCM)...');
-            const { nonce, ciphertext } = await CryptoModule.encryptFile(sharedKey, plaintext);
-            _log(`Зашифровано: ${FileHandler.formatFileSize(ciphertext.length)}`);
+    function _handleIncomingChunk(d) { if (chunkCollector) try { chunkCollector.addChunk(d.chunk_index, CryptoModule.base64ToArrayBuffer(d.data)); } catch(e) {} }
 
-            // Розбиваємо на chunk-и
-            _updateProgress(0.4, 'Відправка...');
-            const chunks = CryptoModule.splitIntoChunks(ciphertext);
-            const nonceB64 = CryptoModule.arrayBufferToBase64(nonce);
-
-            // Відправляємо
-            await WSClient.sendFile(
-                {
-                    filename: file.name,
-                    originalSize: file.size,
-                    nonceB64: nonceB64,
-                    contentType: file.type,
-                },
-                chunks,
-                '', // auth_tag включено в ciphertext (Web Crypto API конкатенує)
-                sha256,
-                (progress, sent, total) => {
-                    _updateProgress(0.4 + progress * 0.6, `Відправлено ${sent}/${total} фрагментів`);
-                }
-            );
-
-            _updateProgress(1, 'Файл відправлено!');
-            _log('Файл відправлено, очікуємо підтвердження від партнера...', 'success');
-
-        } catch (err) {
-            _log(`Помилка відправки: ${err.message}`, 'error');
-            _setState(State.VERIFIED);
+    async function _handleFileComplete() {
+        if (chunkCollector && !chunkCollector.isComplete) {
+            await new Promise(r => { let t = 0; const iv = setInterval(() => { if (chunkCollector?.isComplete || ++t > 200) { clearInterval(iv); r(); } }, 50); });
         }
-    }
-
-    // ── Отримання файлу ────────────────────────────────────────────
-
-    function _handleIncomingFileMetadata(data) {
-        incomingFileMetadata = {
-            filename: data.filename,
-            originalSize: data.original_size,
-            totalChunks: data.chunk_count,
-            nonceB64: data.nonce,
-            contentType: data.content_type,
-        };
-
-        _setState(State.RECEIVING);
-        _log(`Отримуємо файл: ${data.filename} (${FileHandler.formatFileSize(data.original_size)})...`);
-
-        chunkCollector = FileHandler.createChunkCollector(
-            data.chunk_count,
-            (progress, received, total) => {
-                _updateProgress(progress * 0.7, `Отримано ${received}/${total} фрагментів`);
-            }
-        );
-    }
-
-    function _handleIncomingChunk(data) {
-        if (!chunkCollector) return;
-
-        const chunkData = CryptoModule.base64ToArrayBuffer(data.data);
-        chunkCollector.addChunk(data.chunk_index, chunkData);
-    }
-
-    async function _handleFileComplete(data) {
-        if (!chunkCollector || !chunkCollector.isComplete) {
-            // Можливо ще не всі chunk-и дійшли; чекаємо
-            const waitForChunks = () => new Promise((resolve) => {
-                const check = setInterval(() => {
-                    if (chunkCollector?.isComplete) {
-                        clearInterval(check);
-                        resolve();
-                    }
-                }, 50);
-                // Таймаут 10с
-                setTimeout(() => { clearInterval(check); resolve(); }, 10000);
-            });
-            await waitForChunks();
-        }
-
         if (!chunkCollector?.isComplete) {
-            _log('Не всі фрагменти отримані!', 'error');
-            WSClient.sendFileAck(false, 'INCOMPLETE_CHUNKS');
-            _setState(State.VERIFIED);
-            return;
+            _showNotification('Передача неповна', 'danger'); try { WSClient.sendFileAck(false, 'INCOMPLETE'); } catch(e) {}
+            _setState(State.VERIFIED); _showSection('section-transfer'); chunkCollector = null; incomingFileMetadata = null; return;
         }
-
         _updateProgress(0.7, 'Розшифрування...');
-        _log('Усі фрагменти отримані. Розшифрування...');
-
         try {
-            // Збираємо ciphertext
-            const ciphertext = chunkCollector.getResult();
-            const nonce = new Uint8Array(CryptoModule.base64ToArrayBuffer(incomingFileMetadata.nonceB64));
-
-            // Розшифрування (GCM автоматично перевіряє auth tag)
-            const plaintext = await CryptoModule.decryptFile(sharedKey, nonce, ciphertext);
-
-            _updateProgress(0.9, 'Перевірка цілісності...');
-
-            // Перевірка SHA-256
-            const sha256 = await CryptoModule.sha256Hex(plaintext);
-            _log(`SHA-256 розшифрованого: ${sha256.substring(0, 16)}...`);
-
-            // Підтверджуємо
-            WSClient.sendFileAck(true);
-
-            // Зберігаємо файл
-            _updateProgress(1, 'Збереження файлу...');
-            // Зберігаємо файл (NativeBridge обирає нативний або браузерний спосіб)
-            if (typeof NativeBridge !== 'undefined') {
-                await NativeBridge.saveFile(plaintext, incomingFileMetadata.filename, incomingFileMetadata.contentType);
-                await NativeBridge.hapticSuccess();
-            } else {
-                FileHandler.downloadFile(plaintext, incomingFileMetadata.filename, incomingFileMetadata.contentType);
-            }
-
-            _log(`Файл «${incomingFileMetadata.filename}» отримано та розшифровано!`, 'success');
-            _setState(State.COMPLETED);
-
+            const ct = chunkCollector.getResult(), nonce = new Uint8Array(CryptoModule.base64ToArrayBuffer(incomingFileMetadata.nonceB64));
+            const pt = await CryptoModule.decryptFile(sharedKey, nonce, ct);
+            _updateProgress(0.95, 'Збереження...'); WSClient.sendFileAck(true);
+            if (typeof NativeBridge !== 'undefined') { await NativeBridge.saveFile(pt, incomingFileMetadata.filename, incomingFileMetadata.contentType); try { NativeBridge.hapticSuccess(); } catch(e){} }
+            else FileHandler.downloadFile(pt, incomingFileMetadata.filename, incomingFileMetadata.contentType);
+            _updateProgress(1, 'Готово!'); _log(`«${incomingFileMetadata.filename}» отримано!`, 'success'); _showNotification('Файл збережено!', 'success');
+            _setState(State.COMPLETED); _showSection('section-completed');
         } catch (err) {
-            if (err.name === 'OperationError') {
-                _log('ПОМИЛКА ЦІЛІСНОСТІ: GCM auth tag не збігається! Дані пошкоджені або підмінені!', 'error');
-                _showNotification('Помилка: файл пошкоджено або підмінено під час передачі!', 'danger');
-                WSClient.sendFileAck(false, 'AUTH_TAG_MISMATCH');
-            } else {
-                _log(`Помилка розшифрування: ${err.message}`, 'error');
-                WSClient.sendFileAck(false, 'DECRYPT_ERROR');
-            }
-            _setState(State.VERIFIED);
-        } finally {
-            chunkCollector = null;
-            incomingFileMetadata = null;
-        }
+            if (err.name === 'OperationError') { _log('Дані пошкоджені!', 'error'); _showNotification('Файл пошкоджено!', 'danger'); try { WSClient.sendFileAck(false, 'AUTH_TAG_MISMATCH'); } catch(e) {} }
+            else { _log(`Помилка: ${err.message}`, 'error'); try { WSClient.sendFileAck(false, 'DECRYPT_ERROR'); } catch(e) {} }
+            _setState(State.VERIFIED); _showSection('section-transfer');
+        } finally { chunkCollector = null; incomingFileMetadata = null; }
     }
 
-    // ── State Machine ──────────────────────────────────────────────
-
-    function _setState(newState) {
-        const prev = currentState;
-        currentState = newState;
-        console.log(`[App] State: ${prev} → ${newState}`);
-        _updateUI();
-    }
-
-    // ── Скидання ───────────────────────────────────────────────────
-
+    // ═══ STATE / UI ═════════════════════════════════════════════════
+    function _setState(s) { currentState = s; const info = StateInfo[s] || {}; const el = $('current-state'); if (el) { el.textContent = info.label||s; el.className = 'state-badge state-' + s.toLowerCase(); } const h = $('current-hint'); if (h) h.textContent = info.hint||''; }
     function _resetToIdle() {
-        WSClient.disconnect('new_session');
-        keyPair = null;
-        myPublicKeyB64 = null;
-        myFingerprint = null;
-        partnerPublicKey = null;
-        partnerFingerprint = null;
-        sharedKey = null;
-        partnerVerified = false;
-        iVerified = false;
-        sessionId = null;
-        myRole = null;
-        chunkCollector = null;
-        incomingFileMetadata = null;
-
-        // Скидаємо URL
-        if (window.location.pathname !== '/') {
-            history.pushState(null, '', '/');
-        }
-
-        _setState(State.IDLE);
-        _log('Сесію завершено. Готові до нової.');
+        try { QRModule.stopScanning(); } catch(e) {} try { WSClient.disconnect('user_back'); } catch(e) {}
+        keyPair=null; myPublicKeyB64=null; myFingerprint=null; partnerPublicKey=null; partnerFingerprint=null;
+        sharedKey=null; partnerVerified=false; iVerified=false; sessionId=null; myRole=null; partnerConnected=false;
+        chunkCollector=null; incomingFileMetadata=null;
+        try { if (window.location.pathname !== '/') history.pushState(null, '', '/'); } catch(e) {}
+        _setState(State.IDLE); _showSection('section-start'); _updateProgress(0, '');
     }
-
-    // ── UI хелпери ─────────────────────────────────────────────────
 
     function _displayJoinInfo(data) {
-        // QR-код запрошення
-        const qrContainer = $('session-qr');
-        if (qrContainer) {
-            qrContainer.innerHTML = '';
-            QRModule.generateQR(data.join_url, qrContainer, { size: 200 });
-        }
-
-        // Join URL
-        const urlEl = $('join-url');
-        if (urlEl) {
-            urlEl.textContent = data.join_url;
-            urlEl.href = data.join_url;
-        }
-
-        // Session ID
-        const sidEl = $('display-session-id');
-        if (sidEl) sidEl.textContent = data.session_id;
-
-        _showSection('section-waiting');
+        const qr = $('session-qr'); if (qr) { qr.innerHTML = ''; QRModule.generateQR(data.join_url, qr, { size: 200 }); }
+        const url = $('join-url'); if (url) { url.textContent = data.join_url; url.dataset.url = data.join_url; }
+        const sid = $('display-session-id'); if (sid) sid.textContent = data.session_id;
     }
+    function _copyJoinLink() { const u = $('join-url')?.dataset?.url; if (u) { try { navigator.clipboard.writeText(u); } catch(e) { try { NativeBridge.copyToClipboard(u); } catch(e2){} } _showNotification('Скопійовано!', 'success'); } }
+    function _shareJoinLink() { const u = $('join-url')?.dataset?.url; if (u && navigator.share) navigator.share({ title: 'SFT', url: u }).catch(()=>{}); else _copyJoinLink(); }
 
-    function _updateUI() {
-        // Оновлюємо індикатор стану
-        const stateEl = $('current-state');
-        if (stateEl) {
-            const labels = {
-                [State.IDLE]: 'Очікування',
-                [State.CREATING_SESSION]: 'Створення...',
-                [State.WAITING_PARTNER]: 'Очікування партнера',
-                [State.KEYS_GENERATED]: 'Ключі згенеровано',
-                [State.KEYS_EXCHANGED]: 'Ключі обмінено',
-                [State.VERIFYING]: 'Верифікація...',
-                [State.VERIFIED]: 'Верифіковано ✓',
-                [State.TRANSFERRING]: 'Передача...',
-                [State.RECEIVING]: 'Отримання...',
-                [State.COMPLETED]: 'Завершено ✓',
-                [State.ERROR]: 'Помилка',
-            };
-            stateEl.textContent = labels[currentState] || currentState;
-            stateEl.className = 'state-badge state-' + currentState.toLowerCase();
-        }
-
-        // Показуємо/ховаємо секції
-        if (currentState === State.IDLE) {
-            _showSection('section-start');
-        }
-
-        // Кнопка файлу — лише в стані VERIFIED
-        const fileInput = $('file-input');
-        if (fileInput) {
-            fileInput.disabled = currentState !== State.VERIFIED;
-        }
-
-        // Кнопка нової сесії
-        const btnNew = $('btn-new-session');
-        if (btnNew) {
-            btnNew.style.display = (currentState === State.COMPLETED || currentState === State.ERROR) ? '' : 'none';
-        }
-    }
-
-    function _updateVerificationIndicators() {
-        const myIndicator = $('my-verify-status');
-        const partnerIndicator = $('partner-verify-status');
-
-        if (myIndicator) {
-            myIndicator.textContent = iVerified ? '✓ Ви підтвердили' : '○ Очікує';
-            myIndicator.className = iVerified ? 'verify-ok' : 'verify-pending';
-        }
-        if (partnerIndicator) {
-            partnerIndicator.textContent = partnerVerified ? '✓ Партнер підтвердив' : '○ Очікує';
-            partnerIndicator.className = partnerVerified ? 'verify-ok' : 'verify-pending';
-        }
-    }
-
-    function _updateProgress(fraction, label) {
-        const bar = $('progress-bar');
-        const text = $('progress-text');
-        if (bar) bar.style.width = `${Math.round(fraction * 100)}%`;
-        if (text) text.textContent = label || '';
-    }
-
-    function _showSection(sectionId) {
-        document.querySelectorAll('.app-section').forEach(s => s.classList.remove('active'));
-        const section = $(sectionId);
-        if (section) section.classList.add('active');
-    }
-
-    function _showElement(id) { const el = $(id); if (el) el.style.display = ''; }
-    function _hideElement(id) { const el = $(id); if (el) el.style.display = 'none'; }
-
+    function _updateProgress(f, l) { const b = $('progress-bar'); if (b) b.style.width = `${Math.round(f*100)}%`; const t = $('progress-text'); if (t) t.textContent = l||''; }
+    function _showSection(id) { document.querySelectorAll('.app-section').forEach(s => s.classList.remove('active')); $(id)?.classList.add('active'); }
+    function _showElement(id) { const e = $(id); if (e) e.style.display = ''; }
+    function _hideElement(id) { const e = $(id); if (e) e.style.display = 'none'; }
     function _showNotification(text, type) {
-        const container = $('notifications');
-        if (!container) return;
-
-        const el = document.createElement('div');
-        el.className = `notification notification-${type || 'info'}`;
-        el.textContent = text;
-        container.prepend(el);
-
-        setTimeout(() => el.remove(), 8000);
+        const c = $('notifications'); if (!c) return;
+        const el = document.createElement('div'); el.className = `notification notification-${type||'info'}`; el.textContent = text;
+        el.addEventListener('click', () => el.remove()); c.prepend(el); setTimeout(() => { try { el.remove(); } catch(e){} }, 6000);
     }
-
     function _log(msg, level) {
-        const logEl = $('activity-log');
-        if (!logEl) return;
-
-        const time = new Date().toLocaleTimeString('uk-UA');
-        const entry = document.createElement('div');
-        entry.className = `log-entry log-${level || 'info'}`;
-        entry.innerHTML = `<span class="log-time">${time}</span> ${_escapeHtml(msg)}`;
-        logEl.prepend(entry);
-
-        // Обмежуємо кількість записів
-        while (logEl.children.length > 50) {
-            logEl.removeChild(logEl.lastChild);
+        const el = $('activity-log'); if (!el) return;
+        const d = document.createElement('div'); d.className = `log-entry log-${level||'info'}`;
+        d.innerHTML = `<span class="log-time">${new Date().toLocaleTimeString('uk-UA')}</span> ${msg.replace(/</g,'&lt;')}`;
+        el.prepend(d); while (el.children.length > 50) el.removeChild(el.lastChild);
+    }
+    function _initServerUrlCard() {
+        const native = typeof AppConfig !== 'undefined' && AppConfig.isNative();
+        const card = $('card-server-url'); if (!card) return;
+        if (native || window.location.protocol === 'file:' || window.location.protocol === 'capacitor:') {
+            card.style.display = ''; const saved = typeof AppConfig !== 'undefined' ? AppConfig.getServerUrl() : null;
+            if (saved) { const i = $('input-server-url'); if (i) i.value = saved; const s = $('server-url-status'); if (s) s.textContent = '✓ ' + saved; }
         }
     }
 
-    function _escapeHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    }
-
-    // ── Публічний API ──────────────────────────────────────────────
-
-    return {
-        init,
-        getState: () => currentState,
-        getSessionId: () => sessionId,
-    };
+    return { init, getState: () => currentState };
 })();
-
-// Запускаємо після завантаження DOM
 document.addEventListener('DOMContentLoaded', App.init);

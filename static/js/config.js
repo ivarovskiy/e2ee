@@ -17,7 +17,7 @@ const AppConfig = (() => {
 
     // ═══ Встановіть URL вашого relay-сервера тут ═══
     // (використовується лише в нативній апці, не в браузері)
-    const DEFAULT_SERVER_URL = '';  // напр.: 'https://sft.yourdomain.com'
+    const DEFAULT_SERVER_URL = 'https://e2ee-7zis.onrender.com';  // напр.: 'https://sft.yourdomain.com'
 
     // ── Визначення середовища ──────────────────────────────────────
 

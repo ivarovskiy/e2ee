@@ -4,105 +4,91 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#0c0e14">
-    <meta name="description" content="Захищений обмін файлами з E2EE та QR-верифікацією ключів">
+    <meta name="description" content="Захищений обмін файлами з E2EE та QR-верифікацією">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-
     <title>Secure File Transfer</title>
-
     <link rel="manifest" href="manifest.json">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔐</text></svg>">
-
-    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-
-    <!-- Styles -->
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 
-<!-- Notifications -->
 <div id="notifications"></div>
 
 <div class="app-container">
 
-    <!-- Header -->
+    <!-- ── Header ──────────────────────────────────────────── -->
     <header class="app-header">
         <h1><span class="icon">🔐</span> Secure File Transfer</h1>
         <div class="state-bar">
-            <span id="current-state" class="state-badge">Очікування</span>
+            <span id="current-state" class="state-badge">Головна</span>
         </div>
+        <p id="current-hint" class="text-sm text-muted" style="margin-top:6px; text-align:center"></p>
     </header>
 
-    <!-- SECTION: Start (IDLE) -->
+    <!-- ══ 1. START (IDLE) ═════════════════════════════════════ -->
     <section id="section-start" class="app-section active">
 
-        <!-- Server URL (видно лише в нативній апці) -->
         <div class="card" id="card-server-url" style="display:none">
-            <div class="card-title">Relay-сервер</div>
+            <div class="card-title">⚙️ Relay-сервер</div>
             <label class="label">URL сервера</label>
-            <input id="input-server-url" class="input" type="url"
-                   placeholder="https://your-server.com"
-                   autocomplete="off" spellcheck="false">
-            <button id="btn-save-url" class="btn btn-secondary mt-12 btn-sm">
-                Зберегти
-            </button>
+            <input id="input-server-url" class="input" type="url" placeholder="https://your-server.onrender.com">
+            <button id="btn-save-url" class="btn btn-secondary mt-12 btn-sm">Зберегти</button>
             <p class="text-sm text-muted mt-12" id="server-url-status"></p>
         </div>
 
         <div class="card">
             <div class="card-title">Нова передача</div>
             <p class="text-sm text-muted mb-12">
-                Створіть сесію та поділіться посиланням або QR-кодом з партнером.
-                Усі файли шифруються наскрізно (AES-256-GCM).
+                Створіть сесію та поділіться QR-кодом або посиланням з партнером.
             </p>
-            <button id="btn-create" class="btn btn-primary">
-                <span>＋</span> Створити сесію
-            </button>
+            <button id="btn-create" class="btn btn-primary">＋ Створити сесію</button>
         </div>
 
         <div class="card">
-            <div class="card-title">Приєднатись до сесії</div>
+            <div class="card-title">Приєднатись</div>
             <label class="label">ID сесії</label>
-            <input id="input-session-id" class="input" type="text"
-                   placeholder="Вставте ID або перейдіть за посиланням"
-                   autocomplete="off" spellcheck="false">
-            <button id="btn-join" class="btn btn-secondary mt-12">
-                Приєднатись
-            </button>
+            <input id="input-session-id" class="input" type="text" placeholder="Вставте ID сесії" autocomplete="off" spellcheck="false">
+            <button id="btn-join" class="btn btn-secondary mt-12">Приєднатись</button>
         </div>
 
         <div class="card">
             <div class="card-title">Як це працює</div>
-            <p class="text-sm text-muted" style="line-height:1.7">
-                <strong style="color:var(--text-primary)">1.</strong> Ініціатор створює сесію та ділиться QR/посиланням<br>
-                <strong style="color:var(--text-primary)">2.</strong> Обидві сторони обмінюються ключами (ECDH)<br>
-                <strong style="color:var(--text-primary)">3.</strong> Верифікація ключів через QR-коди камерою<br>
-                <strong style="color:var(--text-primary)">4.</strong> Файл шифрується у браузері і передається<br>
-                <strong style="color:var(--text-primary)">5.</strong> Партнер розшифровує та зберігає файл
+            <p class="text-sm text-muted" style="line-height:1.8">
+                <strong style="color:var(--text-primary)">1.</strong> Створіть сесію → покажіть QR партнеру<br>
+                <strong style="color:var(--text-primary)">2.</strong> Обидва обмінюються ключами автоматично<br>
+                <strong style="color:var(--text-primary)">3.</strong> Скануйте QR один одного (захист від MITM)<br>
+                <strong style="color:var(--text-primary)">4.</strong> Оберіть файл → зашифровано → передано<br>
+                <strong style="color:var(--text-primary)">5.</strong> Сервер бачить лише зашифровані дані
             </p>
         </div>
     </section>
 
-    <!-- SECTION: Waiting for Partner -->
+    <!-- ══ 2. WAITING FOR PARTNER (initiator) ══════════════════ -->
     <section id="section-waiting" class="app-section">
-        <div class="card">
-            <div class="card-title">Очікування партнера</div>
-            <p class="text-sm text-muted mb-12">
-                Покажіть QR-код або надішліть посилання партнеру.
-            </p>
+        <button class="btn btn-secondary btn-sm btn-back mb-12">← Назад</button>
 
+        <div class="card">
+            <div class="card-title">📡 Очікування партнера</div>
+            <p class="text-sm text-muted mb-12">
+                Покажіть QR-код партнеру або надішліть посилання.
+                Після приєднання обмін ключами відбудеться автоматично.
+            </p>
             <div class="qr-container">
                 <div id="session-qr"></div>
-                <span class="text-sm text-muted">Відскануйте для приєднання</span>
+                <span class="text-sm text-muted">Партнер сканує цей QR</span>
             </div>
-
             <div class="join-url-box mt-12">
-                <a id="join-url" href="#" target="_blank"></a>
+                <a id="join-url" href="#" style="pointer-events:none"></a>
             </div>
-
+            <div class="btn-group mt-12">
+                <button id="btn-copy-link" class="btn btn-secondary btn-sm">📋 Копіювати</button>
+                <button id="btn-share-link" class="btn btn-secondary btn-sm">↗ Поділитись</button>
+            </div>
             <div class="mt-12">
                 <label class="label">ID сесії</label>
                 <div class="fingerprint-text" id="display-session-id" style="font-size:0.8rem"></div>
@@ -110,24 +96,29 @@
         </div>
     </section>
 
-    <!-- SECTION: Key Exchange Info -->
-    <section id="section-keys" class="app-section">
-        <div class="card">
-            <div class="card-title">Обмін ключами</div>
+    <!-- ══ 3. JOINING (joiner waiting for keys) ════════════════ -->
+    <section id="section-joining" class="app-section">
+        <button class="btn btn-secondary btn-sm btn-back mb-12">← Назад</button>
+
+        <div class="card text-center">
+            <div class="card-title">🔗 Підключення</div>
             <p class="text-sm text-muted">
-                Обмін публічними ключами відбувається автоматично через relay-сервер.
-                Очікуйте завершення...
+                Підключено до сесії. Очікуємо обмін ключами з партнером...
             </p>
+            <div class="mt-16" style="color: var(--accent); font-size: 1.5rem; animation: pulse 1.5s infinite">⏳</div>
         </div>
     </section>
 
-    <!-- SECTION: QR Verification -->
+    <!-- ══ 4. VERIFICATION ═════════════════════════════════════ -->
     <section id="section-verify" class="app-section">
+        <button class="btn btn-secondary btn-sm btn-back mb-12">← Назад</button>
+
         <div class="card">
-            <div class="card-title">Верифікація ключів</div>
+            <div class="card-title">🔍 Верифікація ключів</div>
             <p class="text-sm text-muted mb-12">
-                Обов'язковий крок. Відскануйте QR-код з екрану партнера щоб переконатися
-                у відсутності атаки «людина посередині».
+                <strong style="color:var(--warning)">Обов'язковий крок!</strong>
+                Відскануйте QR-код з екрану партнера камерою свого телефону.
+                Це підтверджує, що ніхто не перехоплює ваш зв'язок.
             </p>
 
             <div class="verify-status">
@@ -137,7 +128,7 @@
 
             <hr class="divider">
 
-            <div class="card-title">Ваш QR-код (покажіть партнеру)</div>
+            <div class="card-title">Ваш QR (покажіть партнеру)</div>
             <div class="qr-container">
                 <div id="my-qr-code"></div>
                 <div class="fingerprint-text" id="my-fingerprint"></div>
@@ -151,71 +142,94 @@
             <div id="scanner-container" style="display:none">
                 <video id="scanner-video" autoplay playsinline muted></video>
                 <canvas id="scanner-canvas"></canvas>
-                <div class="scanner-overlay">
-                    <div class="scanner-crosshair"></div>
-                </div>
+                <div class="scanner-overlay"><div class="scanner-crosshair"></div></div>
             </div>
 
-            <div class="btn-group">
-                <button id="btn-scan-qr" class="btn btn-primary">
-                    📷 Сканувати QR
-                </button>
-                <button id="btn-stop-scan" class="btn btn-danger btn-sm" style="display:none">
-                    Зупинити
-                </button>
-            </div>
-
-            <button id="btn-manual-verify" class="btn btn-secondary mt-12 btn-sm">
-                Ручна верифікація (порівняти текст)
-            </button>
+            <button id="btn-scan-qr" class="btn btn-primary">📷 Сканувати QR партнера</button>
+            <button id="btn-stop-scan" class="btn btn-danger mt-12" style="display:none">⏹ Зупинити камеру</button>
+            <button id="btn-manual-verify" class="btn btn-secondary mt-12 btn-sm">✋ Ручна верифікація</button>
         </div>
     </section>
 
-    <!-- SECTION: File Transfer -->
+    <!-- ══ 5. FILE TRANSFER ════════════════════════════════════ -->
     <section id="section-transfer" class="app-section">
-        <div class="card">
-            <div class="card-title">Передача файлу</div>
-            <p class="text-sm" style="color: var(--success); margin-bottom:12px">
-                ✓ Верифікація пройдена — з'єднання захищене
-            </p>
+        <button class="btn btn-secondary btn-sm btn-back mb-12">← Назад</button>
 
+        <div class="card">
+            <div class="card-title">📁 Передача файлу</div>
+            <p class="text-sm mb-12" style="color: var(--success)">
+                ✓ Зʼєднання захищене — верифікація пройдена
+            </p>
+            <p class="text-sm text-muted mb-12">
+                Оберіть файл для відправки. Або зачекайте — партнер може надіслати файл вам.
+            </p>
             <div class="file-input-wrapper">
                 <input type="file" id="file-input">
                 <div class="file-input-label">
                     <span class="icon">📁</span>
-                    <span class="text">Оберіть файл для відправки</span>
-                    <span class="hint">Максимум 100 МБ · Шифрування AES-256-GCM</span>
+                    <span class="text">Натисніть щоб обрати файл</span>
+                    <span class="hint">Максимум 100 МБ · AES-256-GCM</span>
                 </div>
             </div>
+        </div>
+    </section>
 
+    <!-- ══ 6. PROGRESS (sending/receiving) ═════════════════════ -->
+    <section id="section-progress" class="app-section">
+        <div class="card">
+            <div class="card-title" id="progress-title">⏳ Передача</div>
             <div class="progress-container">
                 <div class="progress-track">
                     <div id="progress-bar"></div>
                 </div>
-                <div id="progress-text"></div>
+                <div id="progress-text" class="mt-12 text-center"></div>
             </div>
+            <p class="text-sm text-muted mt-12 text-center">
+                Не закривайте додаток під час передачі
+            </p>
         </div>
-
-        <button id="btn-new-session" class="btn btn-secondary" style="display:none">
-            Нова сесія
-        </button>
     </section>
 
-    <!-- Activity Log (always visible) -->
+    <!-- ══ 7. COMPLETED ════════════════════════════════════════ -->
+    <section id="section-completed" class="app-section">
+        <div class="card text-center">
+            <div style="font-size:3rem; margin-bottom:12px">✅</div>
+            <div class="card-title">Файл передано!</div>
+            <p class="text-sm text-muted mb-12">
+                Файл успішно зашифровано, передано та розшифровано на іншому пристрої.
+            </p>
+            <button class="btn btn-primary btn-new-session">＋ Нова сесія</button>
+        </div>
+    </section>
+
+    <!-- ══ 8. ERROR ════════════════════════════════════════════ -->
+    <section id="section-error" class="app-section">
+        <div class="card text-center">
+            <div style="font-size:3rem; margin-bottom:12px">⚠️</div>
+            <div class="card-title">Щось пішло не так</div>
+            <p class="text-sm text-muted mb-12">
+                Зʼєднання було перервано або виникла помилка.
+                Поверніться на головну та спробуйте знову.
+            </p>
+            <button class="btn btn-primary btn-new-session">← На головну</button>
+        </div>
+    </section>
+
+    <!-- ══ Activity Log ════════════════════════════════════════ -->
     <div class="log-container">
         <div class="card" style="padding-bottom: 8px;">
-            <div class="card-title">Журнал подій</div>
+            <div class="card-title">📋 Журнал</div>
             <div id="activity-log"></div>
         </div>
     </div>
 
 </div>
 
-<!-- External Libraries (CDN) -->
+<!-- CDN libs -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
 
-<!-- Application Modules (порядок важливий) -->
+<!-- App modules -->
 <script src="js/config.js"></script>
 <script src="js/crypto.js"></script>
 <script src="js/websocket.js"></script>
@@ -224,14 +238,10 @@
 <script src="js/native-bridge.js"></script>
 <script src="js/app.js"></script>
 
-<!-- Service Worker Registration (тільки для PWA, не для Capacitor) -->
 <script>
     if ('serviceWorker' in navigator && !(typeof window.Capacitor !== 'undefined' && window.Capacitor.isNativePlatform())) {
-        navigator.serviceWorker.register('sw.js')
-            .then(reg => console.log('[SW] Registered:', reg.scope))
-            .catch(err => console.log('[SW] Registration failed:', err));
+        navigator.serviceWorker.register('sw.js').catch(() => {});
     }
 </script>
-
 </body>
 </html>
