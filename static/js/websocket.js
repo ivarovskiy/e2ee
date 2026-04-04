@@ -18,9 +18,11 @@ const WSClient = (() => {
     let role = null;
     let reconnectAttempts = 0;
     let intentionalClose = false;
+    let pingInterval = null;
 
-    const MAX_RECONNECT_ATTEMPTS = 5;
-    const RECONNECT_BASE_DELAY = 1000; // мс
+    const MAX_RECONNECT_ATTEMPTS = 10;
+    const RECONNECT_BASE_DELAY = 800;   // мс
+    const PING_INTERVAL_MS = 20_000;    // 20 секунд — keepalive
 
     // Колбеки для різних типів повідомлень
     const handlers = {};
@@ -57,6 +59,7 @@ const WSClient = (() => {
         ws.onopen = () => {
             console.log(`[WS] Connected (session=${sessionId.substring(0, 8)}..., role=${role})`);
             reconnectAttempts = 0;
+            _startPing();
             if (onOpenCallback) onOpenCallback();
         };
 
@@ -71,12 +74,14 @@ const WSClient = (() => {
 
         ws.onclose = (event) => {
             console.log(`[WS] Disconnected (code=${event.code}, reason=${event.reason})`);
+            _stopPing();
 
             if (onCloseCallback) onCloseCallback(event);
 
             // Автоматичний reconnect (якщо закриття не було навмисним)
             if (!intentionalClose && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                const delay = RECONNECT_BASE_DELAY * Math.pow(2, reconnectAttempts);
+                // Обмежуємо затримку до 5 секунд максимум
+                const delay = Math.min(RECONNECT_BASE_DELAY * Math.pow(1.5, reconnectAttempts), 5000);
                 reconnectAttempts++;
                 console.log(`[WS] Reconnecting in ${delay}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
                 setTimeout(_createConnection, delay);
@@ -208,10 +213,26 @@ const WSClient = (() => {
         });
     }
 
+    // ── Keepalive ping ─────────────────────────────────────────────
+
+    function _startPing() {
+        _stopPing();
+        pingInterval = setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                try { ws.send(JSON.stringify({ type: 'PING' })); } catch(e) {}
+            }
+        }, PING_INTERVAL_MS);
+    }
+
+    function _stopPing() {
+        if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+    }
+
     // ── Закриття з'єднання ─────────────────────────────────────────
 
     function disconnect(reason) {
         intentionalClose = true;
+        _stopPing();
         if (ws) {
             sendClose(reason);
             ws.close(1000, reason || 'user_closed');

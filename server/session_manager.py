@@ -170,9 +170,16 @@ class SessionManager:
     Реалізує автоматичне очищення прострочених сесій.
     """
 
+    # Час очікування перед тим як повідомити партнера про відключення.
+    # Дозволяє клієнту перепідключитись після короткочасного розриву
+    # (наприклад, відкриття камери або перемикання додатків) без скидання сесії.
+    DISCONNECT_GRACE_SECONDS = 5
+
     def __init__(self) -> None:
         self._sessions: dict[str, SessionData] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
+        # Задачі відкладеного повідомлення партнера: (session_id, role_value) → Task
+        self._pending_disconnects: dict[tuple[str, str], asyncio.Task] = {}
 
     @property
     def active_session_count(self) -> int:
@@ -260,6 +267,9 @@ class SessionManager:
         """
         Підключає учасника до сесії.
 
+        Підтримує reconnect: якщо для ролі вже є WS-з'єднання,
+        воно замінюється новим (клієнт перепідключився після розриву).
+
         Returns:
             (SessionData, None) при успіху або (None, ErrorCode) при помилці.
         """
@@ -270,10 +280,22 @@ class SessionManager:
         if session.state == SessionState.CLOSED:
             return None, ErrorCode.SESSION_NOT_FOUND
 
-        # Перевірка: чи не зайнята ця роль
         existing_ws = session.get_ws(role)
         if existing_ws is not None:
-            return None, ErrorCode.SESSION_FULL
+            # Reconnect: закриваємо старе з'єднання і скасовуємо відкладене
+            # повідомлення партнера (якщо воно ще не відправлено).
+            key = (session_id, role.value)
+            if key in self._pending_disconnects:
+                self._pending_disconnects[key].cancel()
+                self._pending_disconnects.pop(key, None)
+                logger.info(
+                    f"Session {session_id[:8]}...: {role.value} reconnected "
+                    f"within grace period — PARTNER_DISCONNECTED cancelled"
+                )
+            try:
+                await existing_ws.close()
+            except Exception:
+                pass
 
         session.set_ws(role, ws)
 
@@ -290,29 +312,73 @@ class SessionManager:
     async def disconnect(
         self, session_id: str, role: SessionRole
     ) -> None:
-        """Відключає учасника від сесії."""
+        """
+        Відключає учасника від сесії.
+
+        Замість миттєвого повідомлення партнера запускає відкладену задачу
+        (DISCONNECT_GRACE_SECONDS). Якщо клієнт перепідключиться за цей час —
+        задача скасовується і партнер нічого не отримує.
+        """
         session = self._sessions.get(session_id)
         if session is None:
             return
 
         session.set_ws(role, None)
-
-        # Повідомити партнера
-        partner_role = (
-            SessionRole.JOINER
-            if role == SessionRole.INITIATOR
-            else SessionRole.INITIATOR
+        logger.info(
+            f"Session {session_id[:8]}...: {role.value} disconnected "
+            f"(grace={self.DISCONNECT_GRACE_SECONDS}s)"
         )
-        partner_ws = session.get_ws(partner_role)
-        if partner_ws is not None:
-            try:
-                await partner_ws.send_json(
-                    {"type": "PARTNER_DISCONNECTED", "role": role.value}
-                )
-            except Exception:
-                pass
 
-        logger.info(f"Session {session_id[:8]}...: {role.value} disconnected")
+        # Відкладена задача — можлива скасовка при reconnect
+        key = (session_id, role.value)
+        if key in self._pending_disconnects:
+            self._pending_disconnects[key].cancel()
+
+        task = asyncio.create_task(
+            self._delayed_disconnect_notify(session_id, role)
+        )
+        self._pending_disconnects[key] = task
+
+    async def _delayed_disconnect_notify(
+        self, session_id: str, role: SessionRole
+    ) -> None:
+        """
+        Через DISCONNECT_GRACE_SECONDS перевіряє, чи клієнт повернувся.
+        Якщо ні — сповіщає партнера про відключення.
+        """
+        try:
+            await asyncio.sleep(self.DISCONNECT_GRACE_SECONDS)
+
+            session = self._sessions.get(session_id)
+            if session is None:
+                return
+
+            # Якщо роль знову підключена — reconnect відбувся, нічого не робимо
+            if session.get_ws(role) is not None:
+                return
+
+            partner_role = (
+                SessionRole.JOINER
+                if role == SessionRole.INITIATOR
+                else SessionRole.INITIATOR
+            )
+            partner_ws = session.get_ws(partner_role)
+            if partner_ws is not None:
+                try:
+                    await partner_ws.send_json(
+                        {"type": "PARTNER_DISCONNECTED", "role": role.value}
+                    )
+                    logger.info(
+                        f"Session {session_id[:8]}...: sent PARTNER_DISCONNECTED "
+                        f"for {role.value} after grace period"
+                    )
+                except Exception:
+                    pass
+        except asyncio.CancelledError:
+            pass
+        finally:
+            key = (session_id, role.value)
+            self._pending_disconnects.pop(key, None)
 
     async def close_session(
         self, session_id: str, reason: str = "closed"

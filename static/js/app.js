@@ -103,6 +103,10 @@ const App = (() => {
         });
         _initServerUrlCard();
 
+        // Home screen QR scanner (join by scanning partner's QR)
+        $('btn-scan-join-qr')?.addEventListener('click', _scanJoinQR);
+        $('btn-stop-scan-join')?.addEventListener('click', _stopJoinScan);
+
         // Pane switching — bottom nav + sidebar
         document.querySelectorAll('.bottom-nav-item, .sidebar-nav-item').forEach(btn => {
             btn.addEventListener('click', () => _switchPane(btn.dataset.tab));
@@ -395,6 +399,45 @@ const App = (() => {
         _setState(State.KEYS_EXCHANGED);
     }
 
+    // ═══ HOME SCREEN QR SCANNER (join session by scanning invite QR) ═
+    async function _scanJoinQR() {
+        if (!QRModule.isCameraSupported()) {
+            _showNotification('Камера не доступна', 'warning');
+            return;
+        }
+        _showElement('home-scanner-container');
+        _hideElement('btn-scan-join-qr');
+        _showElement('btn-stop-scan-join');
+        try {
+            const scanned = await QRModule.startScanning(
+                $('home-scanner-video'),
+                $('home-scanner-canvas')
+            );
+            _stopJoinScan();
+            // Accept full URL (/join/<id>) or bare session ID
+            let sid = scanned.trim();
+            const m = sid.match(/\/join\/([a-zA-Z0-9_-]+)/);
+            if (m) sid = m[1];
+            if (sid) {
+                _joinExistingSession(sid);
+            } else {
+                _showNotification('Невірний QR-код', 'warning');
+            }
+        } catch (err) {
+            _stopJoinScan();
+            if (err.message !== 'Сканування зупинено') {
+                _showNotification(err.message, 'warning');
+            }
+        }
+    }
+
+    function _stopJoinScan() {
+        try { QRModule.stopScanning(); } catch(e) {}
+        _hideElement('home-scanner-container');
+        _showElement('btn-scan-join-qr');
+        _hideElement('btn-stop-scan-join');
+    }
+
     function _manualVerify() {
         const ok = confirm('Порівняйте fingerprint партнера:\n\n' + QRModule.formatFingerprint(partnerFingerprint) + '\n\nЗбігається?');
         iVerified = ok; WSClient.sendVerificationStatus(ok);
@@ -572,6 +615,7 @@ const App = (() => {
     }
 
     function _resetToIdle() {
+        try { _stopJoinScan(); }           catch(e) {}
         try { QRModule.stopScanning(); }   catch(e) {}
         try { WSClient.disconnect('user_back'); } catch(e) {}
         keyPair=null; myPublicKeyB64=null; myFingerprint=null;

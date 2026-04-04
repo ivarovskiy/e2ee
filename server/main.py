@@ -250,6 +250,10 @@ async def _handle_message(
         return
 
     # Маршрутизація за типом повідомлення
+    # PING — keepalive від клієнта, ігноруємо (без відповіді)
+    if msg_type == "PING":
+        return
+
     handlers = {
         MessageType.KEY_EXCHANGE.value: _handle_key_exchange,
         MessageType.VERIFICATION_STATUS.value: _handle_verification_status,

@@ -1685,6 +1685,43 @@ body::before {
     }
 }
 
+/* ── Home screen join divider ───────────────────────────────────── */
+.join-divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 6px 0;
+}
+.join-divider::before,
+.join-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+}
+
+/* Home scanner container (reuses verification scanner styles) */
+#home-scanner-container {
+    position: relative;
+    width: 100%;
+    max-width: 280px;
+    margin: 0 auto 4px;
+    border-radius: 16px;
+    overflow: hidden;
+    background: #000;
+    aspect-ratio: 1;
+}
+#home-scanner-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
 @media (min-width: 1200px) {
     .app-container             { max-width: 680px; }
     #pane-vault .app-container { max-width: 960px; }
