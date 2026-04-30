@@ -171,9 +171,9 @@ class SessionManager:
     """
 
     # Час очікування перед тим як повідомити партнера про відключення.
-    # Дозволяє клієнту перепідключитись після короткочасного розриву
-    # (наприклад, відкриття камери або перемикання додатків) без скидання сесії.
-    DISCONNECT_GRACE_SECONDS = 5
+    # Повинен перевищувати максимальну затримку reconnect клієнта (5 секунд),
+    # щоб гарантувати що reconnect встигає до надсилання PARTNER_DISCONNECTED.
+    DISCONNECT_GRACE_SECONDS = 10
 
     def __init__(self) -> None:
         self._sessions: dict[str, SessionData] = {}
@@ -377,8 +377,11 @@ class SessionManager:
         except asyncio.CancelledError:
             pass
         finally:
+            # Видаляємо лише ЦІЄЮ задачу — не зачіпаємо нову задачу,
+            # яку могли створити під час нашого виконання.
             key = (session_id, role.value)
-            self._pending_disconnects.pop(key, None)
+            if self._pending_disconnects.get(key) is asyncio.current_task():
+                self._pending_disconnects.pop(key, None)
 
     async def close_session(
         self, session_id: str, reason: str = "closed"

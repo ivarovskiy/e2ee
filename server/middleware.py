@@ -43,7 +43,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "worker-src 'self' blob:; "
             "frame-ancestors 'none'"
         ),
-        "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
         "X-Frame-Options": "DENY",
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
@@ -51,11 +50,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         "X-Permitted-Cross-Domain-Policies": "none",
     }
 
+    # HSTS виставляється лише на HTTPS — на HTTP він ламає доступ назавжди
+    HSTS_HEADER = "max-age=31536000; includeSubDomains"
+
     async def dispatch(self, request: Request, call_next) -> Response:
         response = await call_next(request)
 
         for header, value in self.SECURITY_HEADERS.items():
             response.headers[header] = value
+
+        # Strict-Transport-Security — тільки для HTTPS з'єднань
+        if request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = self.HSTS_HEADER
 
         return response
 

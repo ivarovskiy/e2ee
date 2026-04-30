@@ -63,7 +63,16 @@ const VaultModule = (() => {
     async function saveFile(data, filename, contentType, direction, sessionId) {
         if (!_db || !_key) throw new Error('Vault not ready');
 
-        const ab    = data instanceof ArrayBuffer ? data : data.buffer;
+        // Якщо data — зрізаний Uint8Array, data.buffer може бути більшим за реальні дані.
+        // Явно вирізаємо лише потрібний діапазон байт.
+        let ab;
+        if (data instanceof ArrayBuffer) {
+            ab = data;
+        } else if (ArrayBuffer.isView(data)) {
+            ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+        } else {
+            throw new Error('Vault: непідтримуваний тип даних');
+        }
         const nonce = crypto.getRandomValues(new Uint8Array(12));
         const encrypted = await crypto.subtle.encrypt(
             { name: 'AES-GCM', iv: nonce }, _key, ab

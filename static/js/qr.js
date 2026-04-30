@@ -116,9 +116,14 @@ const QRModule = (() => {
             stopScanning();
         }
 
+        // Перевіряємо наявність jsQR ДО відкриття камери
+        if (typeof jsQR === 'undefined') {
+            throw new Error('Сканер QR не готовий. Оновіть сторінку або використайте ручну верифікацію.');
+        }
+
         scanning = true;
 
-        // Перевіряємо підтримку
+        // Перевіряємо підтримку камери
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             scanning = false;
             throw new Error('Камера не підтримується на цьому пристрої. Використайте ручну верифікацію.');

@@ -93,15 +93,17 @@ class RateLimiter:
             del self._entries[ip]
 
 
-# Інстанси rate limiter-ів
+# Інстанси rate limiter-ів (значення беруться з config.py / env vars)
+from .config import settings  # noqa: E402 — circular-safe, імпортується після класів
+
 http_limiter = RateLimiter(
-    max_requests=10,
+    max_requests=settings.http_rate_limit,
     window_seconds=1.0,
     name="http",
 )
 
 ws_limiter = RateLimiter(
-    max_requests=5,
+    max_requests=settings.ws_connect_rate_limit,
     window_seconds=60.0,
     name="websocket",
 )

@@ -139,11 +139,12 @@ const NativeBridge = (() => {
                 return true;
             }
 
-            // Конвертуємо ArrayBuffer у base64
+            // Конвертуємо ArrayBuffer у base64 блоками, щоб уникнути O(n²) string concat
             const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+            const BLOCK = 8192;
             let binary = '';
-            for (let i = 0; i < bytes.length; i++) {
-                binary += String.fromCharCode(bytes[i]);
+            for (let i = 0; i < bytes.length; i += BLOCK) {
+                binary += String.fromCharCode(...bytes.subarray(i, i + BLOCK));
             }
             const base64Data = btoa(binary);
 

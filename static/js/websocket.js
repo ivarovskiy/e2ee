@@ -19,6 +19,7 @@ const WSClient = (() => {
     let reconnectAttempts = 0;
     let intentionalClose = false;
     let pingInterval = null;
+    let reconnectTimer = null;   // зберігаємо таймер щоб скасувати при connect()
 
     const MAX_RECONNECT_ATTEMPTS = 10;
     const RECONNECT_BASE_DELAY = 800;   // мс
@@ -39,6 +40,8 @@ const WSClient = (() => {
         role = sRole;
         intentionalClose = false;
         reconnectAttempts = 0;
+        // Скасовуємо будь-який pending reconnect від попередньої сесії
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
         _createConnection();
     }
@@ -80,11 +83,10 @@ const WSClient = (() => {
 
             // Автоматичний reconnect (якщо закриття не було навмисним)
             if (!intentionalClose && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                // Обмежуємо затримку до 5 секунд максимум
                 const delay = Math.min(RECONNECT_BASE_DELAY * Math.pow(1.5, reconnectAttempts), 5000);
                 reconnectAttempts++;
                 console.log(`[WS] Reconnecting in ${delay}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
-                setTimeout(_createConnection, delay);
+                reconnectTimer = setTimeout(() => { reconnectTimer = null; _createConnection(); }, delay);
             }
         };
 
@@ -157,41 +159,41 @@ const WSClient = (() => {
 
     async function sendFile(metadata, chunks, authTagB64, sha256Plaintext, onProgress) {
         // FILE_METADATA
-        send({
+        if (!send({
             type: 'FILE_METADATA',
             filename: metadata.filename,
             original_size: metadata.originalSize,
             chunk_count: chunks.length,
             nonce: metadata.nonceB64,
             content_type: metadata.contentType || 'application/octet-stream',
-        });
+        })) throw new Error('З\'єднання втрачено перед відправкою');
 
         // FILE_CHUNK × N
         for (let i = 0; i < chunks.length; i++) {
             const chunkB64 = CryptoModule.arrayBufferToBase64(chunks[i]);
-            send({
+            if (!send({
                 type: 'FILE_CHUNK',
                 chunk_index: i,
                 total_chunks: chunks.length,
                 data: chunkB64,
-            });
+            })) throw new Error(`З\'єднання втрачено на фрагменті ${i + 1}/${chunks.length}`);
 
             if (onProgress) {
                 onProgress((i + 1) / chunks.length, i + 1, chunks.length);
             }
 
-            // Невелика пауза щоб не перевантажити WS
+            // Невелика пауза щоб не перевантажити WS буфер
             if (i % 10 === 9) {
                 await new Promise(r => setTimeout(r, 10));
             }
         }
 
         // FILE_COMPLETE
-        send({
+        if (!send({
             type: 'FILE_COMPLETE',
             auth_tag: authTagB64,
             sha256_plaintext: sha256Plaintext || '',
-        });
+        })) throw new Error('З\'єднання втрачено після відправки');
     }
 
     // ── Відправка FILE_ACK ─────────────────────────────────────────
@@ -232,6 +234,7 @@ const WSClient = (() => {
 
     function disconnect(reason) {
         intentionalClose = true;
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         _stopPing();
         if (ws) {
             sendClose(reason);

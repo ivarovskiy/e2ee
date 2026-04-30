@@ -34,7 +34,7 @@ from .models import (
     OutgoingError,
 )
 from .session_manager import session_manager, SessionData
-from .crypto_utils import generate_session_qr_data, generate_qr_png_base64
+from .crypto_utils import generate_session_qr_data, generate_qr_png_base64, validate_fingerprint_format
 from .rate_limiter import ws_limiter
 from .middleware import SecurityHeadersMiddleware, RateLimitMiddleware
 
@@ -211,6 +211,40 @@ async def websocket_endpoint(
         except Exception:
             pass
 
+    # Якщо партнер вже надіслав ключ до підключення цього учасника —
+    # одразу ретранслюємо збережений ключ (інакше KEY_EXCHANGE був відкинутий
+    # бо partner_ws тоді був None).
+    partner_role_obj = (
+        SessionRole.JOINER
+        if session_role == SessionRole.INITIATOR
+        else SessionRole.INITIATOR
+    )
+    stored_pubkey = (
+        session.initiator_pubkey
+        if partner_role_obj == SessionRole.INITIATOR
+        else session.joiner_pubkey
+    )
+    stored_fp = (
+        session.initiator_fingerprint
+        if partner_role_obj == SessionRole.INITIATOR
+        else session.joiner_fingerprint
+    )
+    if stored_pubkey and stored_fp:
+        try:
+            await websocket.send_json({
+                "type": MessageType.KEY_RELAY.value,
+                "public_key": stored_pubkey,
+                "fingerprint": stored_fp,
+                "key_algorithm": "ECDH-P256",
+                "from_role": partner_role_obj.value,
+            })
+            logger.info(
+                f"Session {session_id[:8]}...: "
+                f"replayed stored key of {partner_role_obj.value} → {session_role.value}"
+            )
+        except Exception:
+            pass
+
     # Головний цикл обробки повідомлень
     try:
         while True:
@@ -294,8 +328,8 @@ async def _handle_key_exchange(
             )
         return
 
-    # Валідація формату fingerprint
-    if len(fingerprint) != 64:
+    # Валідація формату fingerprint (64 hex-символи SHA-256)
+    if not validate_fingerprint_format(fingerprint):
         ws = session.get_ws(role)
         if ws:
             await _send_error(
@@ -378,6 +412,18 @@ async def _handle_file_metadata(
     if not session.both_verified:
         if ws:
             await _send_error(ws, ErrorCode.VERIFICATION_REQUIRED)
+        return
+
+    # Перевірка chunk_count: обмежуємо щоб партнер не виділив гігантський масив
+    # 100 МБ / 256 КБ = ~400 chunk-ів максимум
+    MAX_CHUNKS = (settings.max_file_size_bytes // (256 * 1024)) + 1
+    chunk_count = data.get("chunk_count", 1)
+    if not isinstance(chunk_count, int) or chunk_count < 1 or chunk_count > MAX_CHUNKS:
+        if ws:
+            await _send_error(
+                ws, ErrorCode.INVALID_MESSAGE,
+                message=f"Invalid chunk_count: must be 1..{MAX_CHUNKS}"
+            )
         return
 
     # Перевірка розміру файлу

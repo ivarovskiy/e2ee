@@ -33,6 +33,7 @@ const App = (() => {
     let partnerPublicKey = null, partnerFingerprint = null;
     let sharedKey = null, partnerVerified = false, iVerified = false;
     let chunkCollector = null, incomingFileMetadata = null, partnerConnected = false;
+    let _ackTimer = null;
 
     const $ = (id) => document.getElementById(id);
 
@@ -299,6 +300,7 @@ const App = (() => {
         WSClient.on('FILE_CHUNK',    (d) => { try { _handleIncomingChunk(d); }        catch(e) {} });
         WSClient.on('FILE_COMPLETE', async () => { try { await _handleFileComplete(); } catch(e) { _log(`Помилка: ${e.message}`, 'error'); _setState(State.VERIFIED); _showSection('section-transfer'); } });
         WSClient.on('FILE_ACK', (d) => {
+            if (_ackTimer) { clearTimeout(_ackTimer); _ackTimer = null; }
             if (d.success) {
                 _log('Партнер отримав файл!', 'success'); _showNotification('Файл доставлено!', 'success');
                 _setState(State.COMPLETED); _showSection('section-completed');
@@ -489,6 +491,15 @@ const App = (() => {
 
             // Зберігаємо у сховище (відправлений файл)
             _vaultSaveBackground(pt, file.name, file.type, 'sent');
+
+            // Таймаут: якщо партнер не надіслав FILE_ACK за 30 сек — не зависаємо
+            _ackTimer = setTimeout(() => {
+                _ackTimer = null;
+                if (currentState === State.TRANSFERRING) {
+                    _showNotification('Партнер не підтвердив отримання (таймаут)', 'warning');
+                    _setState(State.VERIFIED); _showSection('section-transfer');
+                }
+            }, 30000);
         } catch (err) {
             _log(`Помилка: ${err.message}`, 'error');
             _showNotification('Помилка відправки', 'danger');
@@ -615,6 +626,7 @@ const App = (() => {
     }
 
     function _resetToIdle() {
+        if (_ackTimer) { clearTimeout(_ackTimer); _ackTimer = null; }
         try { _stopJoinScan(); }           catch(e) {}
         try { QRModule.stopScanning(); }   catch(e) {}
         try { WSClient.disconnect('user_back'); } catch(e) {}
