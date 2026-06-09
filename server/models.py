@@ -45,12 +45,16 @@ class MessageType(str, Enum):
     SESSION_CLOSE = "SESSION_CLOSE"
     ERROR = "ERROR"
 
+    # Observer
+    OBSERVER_CONNECTED = "OBSERVER_CONNECTED"
+
 
 class SessionRole(str, Enum):
     """Ролі учасників сесії."""
 
     INITIATOR = "initiator"
     JOINER = "joiner"
+    OBSERVER = "observer"
 
 
 class SessionState(str, Enum):
@@ -79,6 +83,8 @@ class ErrorCode(str, Enum):
     INVALID_MESSAGE = "INVALID_MESSAGE"
     INVALID_STATE = "INVALID_STATE"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    SESSION_IN_PROGRESS = "SESSION_IN_PROGRESS"
+    OBSERVER_READONLY = "OBSERVER_READONLY"
 
 
 # ── Вхідні повідомлення (від клієнта) ──────────────────────────────

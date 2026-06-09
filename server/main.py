@@ -194,6 +194,45 @@ async def websocket_endpoint(
         f"WS connected: session={session_id[:8]}..., role={role}"
     )
 
+    # ── Observer: окрема логіка підключення ─────────────────────────
+    if session_role == SessionRole.OBSERVER:
+        await websocket.send_json({
+            "type": MessageType.OBSERVER_CONNECTED.value,
+            "message": "Підключено як спостерігач. Ви бачите зашифрований трафік сесії.",
+        })
+
+        # Якщо ключі вже збережені — надсилаємо observer'у (він бачить ключі,
+        # але не може розшифрувати без приватного ключа одного з учасників).
+        for stored_role, pubkey, fp in [
+            (SessionRole.INITIATOR, session.initiator_pubkey, session.initiator_fingerprint),
+            (SessionRole.JOINER,    session.joiner_pubkey,    session.joiner_fingerprint),
+        ]:
+            if pubkey and fp:
+                try:
+                    await websocket.send_json({
+                        "type": MessageType.KEY_RELAY.value,
+                        "public_key": pubkey,
+                        "fingerprint": fp,
+                        "key_algorithm": "ECDH-P256",
+                        "from_role": stored_role.value,
+                    })
+                except Exception:
+                    pass
+
+        try:
+            while True:
+                raw = await websocket.receive_text()
+                await _handle_observer_message(session, websocket, raw)
+        except WebSocketDisconnect:
+            logger.info(f"WS disconnected: session={session_id[:8]}..., role=observer")
+        except Exception as e:
+            logger.error(f"WS error (observer): session={session_id[:8]}..., {e}")
+        finally:
+            await session_manager.disconnect(session_id, SessionRole.OBSERVER)
+        return
+
+    # ── Initiator / Joiner: стандартна логіка ───────────────────────
+
     # Повідомляємо партнера про підключення
     if session.both_connected:
         await _notify_both(session, {
@@ -256,6 +295,39 @@ async def websocket_endpoint(
         logger.error(f"WS error: session={session_id[:8]}..., {e}")
     finally:
         await session_manager.disconnect(session_id, session_role)
+
+
+# ── Observer Message Handler ─────────────────────────────────────────
+
+# Типи, які observer не може надсилати
+_OBSERVER_BLOCKED_TYPES = frozenset({
+    MessageType.KEY_EXCHANGE.value,
+    MessageType.VERIFICATION_STATUS.value,
+    MessageType.FILE_METADATA.value,
+    MessageType.FILE_CHUNK.value,
+    MessageType.FILE_COMPLETE.value,
+    MessageType.FILE_ACK.value,
+})
+
+
+async def _handle_observer_message(
+    session: SessionData, ws: WebSocket, raw: str
+) -> None:
+    """Обробляє повідомлення від observer (тільки read-only операції)."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return
+
+    msg_type = data.get("type")
+    if msg_type == "PING":
+        return
+
+    if msg_type in _OBSERVER_BLOCKED_TYPES:
+        await _send_error(
+            ws, ErrorCode.OBSERVER_READONLY,
+            message="Observer може лише спостерігати",
+        )
 
 
 # ── Message Handler ─────────────────────────────────────────────────
@@ -346,16 +418,18 @@ async def _handle_key_exchange(
         f"{role.value} sent KEY_EXCHANGE (fp={fingerprint[:16]}...)"
     )
 
-    # Ретранслюємо партнеру
+    # Ретранслюємо партнеру та observer'у
+    relay_msg = {
+        "type": MessageType.KEY_RELAY.value,
+        "public_key": pubkey,
+        "fingerprint": fingerprint,
+        "key_algorithm": key_algorithm,
+        "from_role": role.value,
+    }
     partner_ws = session.get_partner_ws(role)
     if partner_ws is not None:
-        await partner_ws.send_json({
-            "type": MessageType.KEY_RELAY.value,
-            "public_key": pubkey,
-            "fingerprint": fingerprint,
-            "key_algorithm": key_algorithm,
-            "from_role": role.value,
-        })
+        await partner_ws.send_json(relay_msg)
+    await _relay_to_observer(session, relay_msg)
 
     # Оновлюємо стан
     session_manager.update_state(session)
@@ -461,10 +535,11 @@ async def _handle_file_metadata(
         f"size={original_size}, chunks={data.get('chunk_count')})"
     )
 
-    # Ретранслюємо партнеру (zero-trust: вміст не інтерпретується)
+    # Ретранслюємо партнеру та observer'у (zero-trust: вміст не інтерпретується)
     partner_ws = session.get_partner_ws(role)
     if partner_ws is not None:
         await partner_ws.send_json(data)
+    await _relay_to_observer(session, data)
 
 
 async def _handle_file_chunk(
@@ -499,21 +574,22 @@ async def _handle_file_chunk(
     partner_ws = session.get_partner_ws(role)
     if partner_ws is not None:
         await partner_ws.send_json(data)
+    await _relay_to_observer(session, data)
 
 
 async def _handle_file_complete(
     session: SessionData, role: SessionRole, data: dict
 ) -> None:
-    """Обробляє FILE_COMPLETE: ретранслює auth_tag партнеру."""
+    """Обробляє FILE_COMPLETE: ретранслює auth_tag партнеру та observer'у."""
     logger.info(
         f"Session {session.session_id[:8]}...: "
         f"FILE_COMPLETE (chunks_received={session.chunks_received})"
     )
 
-    # Ретранслюємо
     partner_ws = session.get_partner_ws(role)
     if partner_ws is not None:
         await partner_ws.send_json(data)
+    await _relay_to_observer(session, data)
 
 
 async def _handle_file_ack(
@@ -588,6 +664,16 @@ async def _notify_both(session: SessionData, data: dict) -> None:
                 pass
 
 
+async def _relay_to_observer(session: SessionData, data: dict) -> None:
+    """Пересилає read-only копію повідомлення observer'у якщо підключений."""
+    obs_ws = session.get_observer_ws()
+    if obs_ws is not None:
+        try:
+            await obs_ws.send_json(data)
+        except Exception:
+            pass
+
+
 def _get_ws_client_ip(websocket: WebSocket) -> str:
     """Отримує IP клієнта з WebSocket."""
     forwarded = websocket.headers.get("X-Forwarded-For")
@@ -616,6 +702,18 @@ async def join_session_page(session_id: str):
     return JSONResponse(
         status_code=404,
         content={"message": "Client not found. Deploy static files."},
+    )
+
+
+@app.get("/observer/{session_id}")
+async def observer_page(session_id: str):
+    """Сторінка observer'а — демонстрація неможливості розшифрування перехопленого трафіку."""
+    observer = STATIC_DIR / "observer.html"
+    if observer.exists():
+        return FileResponse(str(observer))
+    return JSONResponse(
+        status_code=404,
+        content={"message": "Observer page not found. Deploy static files."},
     )
 
 

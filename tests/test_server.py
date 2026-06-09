@@ -19,6 +19,7 @@ import secrets
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
+from starlette.testclient import TestClient
 from unittest.mock import AsyncMock, MagicMock
 
 from server.main import app
@@ -481,6 +482,69 @@ class TestModels:
         assert ErrorCode.SESSION_NOT_FOUND.value == "SESSION_NOT_FOUND"
         assert ErrorCode.VERIFICATION_REQUIRED.value == "VERIFICATION_REQUIRED"
         assert ErrorCode.PAYLOAD_TOO_LARGE.value == "PAYLOAD_TOO_LARGE"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Тести Observer
+# ══════════════════════════════════════════════════════════════════════
+
+class TestObserver:
+    """Тести для ролі observer (перехоплювач)."""
+
+    def test_observer_connects_to_active_session(self):
+        """Observer підключається до сесії та отримує OBSERVER_CONNECTED."""
+        session = session_manager.create_session()
+        sid = session.session_id
+
+        with TestClient(app) as client:
+            with client.websocket_connect(f"/ws/{sid}/observer") as obs_ws:
+                msg = obs_ws.receive_json()
+                assert msg["type"] == "OBSERVER_CONNECTED"
+                assert "message" in msg
+
+    def test_observer_receives_file_chunks(self):
+        """Observer отримує копію FILE_CHUNK при передачі файлу."""
+        session = session_manager.create_session()
+        sid = session.session_id
+        # Переводимо сесію в стан TRANSFERRING, щоб FILE_CHUNK приймався
+        session.state = SessionState.TRANSFERRING
+
+        with TestClient(app) as client:
+            with client.websocket_connect(f"/ws/{sid}/initiator") as init_ws:
+                with client.websocket_connect(f"/ws/{sid}/observer") as obs_ws:
+                    obs_ws.receive_json()  # OBSERVER_CONNECTED
+
+                    chunk_payload = {
+                        "type": "FILE_CHUNK",
+                        "chunk_index": 0,
+                        "total_chunks": 1,
+                        "data": "AAAA" * 20,
+                    }
+                    init_ws.send_json(chunk_payload)
+
+                    msg = obs_ws.receive_json()
+                    assert msg["type"] == "FILE_CHUNK"
+                    assert msg["chunk_index"] == 0
+                    assert msg["data"] == "AAAA" * 20
+
+    def test_observer_cannot_send_key_exchange(self):
+        """Observer отримує помилку OBSERVER_READONLY при спробі надіслати KEY_EXCHANGE."""
+        session = session_manager.create_session()
+        sid = session.session_id
+
+        with TestClient(app) as client:
+            with client.websocket_connect(f"/ws/{sid}/observer") as obs_ws:
+                obs_ws.receive_json()  # OBSERVER_CONNECTED
+
+                obs_ws.send_json({
+                    "type": "KEY_EXCHANGE",
+                    "public_key": "dGVzdA==",
+                    "fingerprint": "a" * 64,
+                })
+
+                msg = obs_ws.receive_json()
+                assert msg["type"] == "ERROR"
+                assert msg["error_code"] == "OBSERVER_READONLY"
 
 
 # ══════════════════════════════════════════════════════════════════════

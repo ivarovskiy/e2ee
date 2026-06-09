@@ -15,8 +15,7 @@
 const AppConfig = (() => {
     'use strict';
 
-    // ═══ Встановіть URL вашого relay-сервера тут ═══
-    // (використовується лише в нативній апці, не в браузері)
+
     const DEFAULT_SERVER_URL = '';  // напр.: 'https://sft.yourdomain.com'
 
     // ── Визначення середовища ──────────────────────────────────────
@@ -40,15 +39,14 @@ const AppConfig = (() => {
             return window.location.origin;
         }
 
-        // У нативній апці — зовнішній URL
-        // Спробуємо з localStorage
+
         const saved = _safeGetItem('sft_server_url');
         if (saved) return saved;
 
-        // Якщо задано за замовчуванням
+
         if (DEFAULT_SERVER_URL) return DEFAULT_SERVER_URL;
 
-        // Запитуємо у користувача
+
         return null; // app.js обробить відсутність URL
     }
 

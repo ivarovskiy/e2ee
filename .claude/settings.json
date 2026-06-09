@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -m pytest tests/ -v --tb=short)"
+      "Bash(python -m pytest tests/ -v --tb=short)",
+      "Bash(python -m pytest tests/test_server.py -v --tb=short -x)",
+      "Bash(python -m pytest tests/test_server.py -v --tb=short -k \"not test_security_headers\")"
     ]
   }
 }

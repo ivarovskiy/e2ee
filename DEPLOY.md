@@ -1,224 +1,218 @@
-# Деплой та збірка — від нуля до робочої апки на телефоні
+# Деплой та збірка — від нуля до робочої апки
 
 ## Загальна схема
 
 ```
-   📱 Телефон A (APK)                        📱 Телефон Б (APK)
-       │                                          │
-       │  WSS (зашифровані blob)                   │
-       └──────────── ☁️ Relay ─────────────────────┘
-                  (Render.com)
-                  НЕ бачить файли
+📱 Телефон A (APK або браузер)          📱 Телефон Б (APK або браузер)
+        │                                          │
+        │  WSS (зашифровані blob, E2EE)            │
+        └──────────── ☁️ Relay ─────────────────────┘
+                   (Render.com / Docker)
+                   НЕ бачить файли
 ```
-
-Два етапи:
-1. **Деплой relay-сервера** на Render.com (5 хвилин, безкоштовно)
-2. **Збірка APK** через Android Studio і встановлення на телефон
-
 
 ---
 
-## ЕТАП 1: Деплой relay-сервера на Render.com
+## ЕТАП 1: Деплой relay-сервера
 
-### 1.1. Завантажити проект на GitHub
+### Варіант А — Render.com (безкоштовно, 5 хвилин)
+
+1. Завантажити репозиторій на GitHub
+2. Зайти на [render.com](https://render.com) → **New → Web Service**
+3. Підключити репозиторій — Render знайде `render.yaml` автоматично
+4. Натиснути **Create Web Service** → зачекати 2-3 хвилини
+5. Отримати URL: `https://YOUR-APP.onrender.com`
+
+Перевірка:
+```bash
+curl https://YOUR-APP.onrender.com/api/health
+# → {"status":"ok","active_sessions":0,"version":"1.0.0"}
+```
+
+> Безкоштовний план "засинає" після 15 хв без активності.
+> Перший запит після сну може займати 30-50 секунд.
+
+**Автодеплой при git push:**
+```bash
+git add . && git commit -m "update" && git push
+# → Render деплоїть автоматично за 1-2 хвилини
+```
+
+### Варіант Б — Docker (self-hosted)
 
 ```bash
-# Створити новий репозиторій на github.com, потім:
-cd secure-file-transfer
-git init
-git add .
-git commit -m "Initial commit"
-git remote add origin https://github.com/YOUR_USER/secure-file-transfer.git
-git push -u origin main
+docker build -t secure-drop .
+docker run -d -p 8000:8000 \
+  -e SFT_CORS_ORIGINS='["https://your-domain.com"]' \
+  -e SFT_LOG_LEVEL=INFO \
+  secure-drop
 ```
 
-### 1.2. Деплой на Render
+### Варіант В — локальна розробка
 
-1. Зайти на **[render.com](https://render.com)** → зареєструватися (можна через GitHub)
-2. Натиснути **New** → **Web Service**
-3. Підключити GitHub-репозиторій `secure-file-transfer`
-4. Render автоматично знайде `render.yaml` і заповнить налаштування:
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn server.main:app --host 0.0.0.0 --port $PORT`
-5. Обрати план **Free**
-6. Натиснути **Create Web Service**
-
-### 1.3. Отримати URL
-
-Через 2-3 хвилини сервер буде доступний за адресою типу:
+```bash
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+python run.py
+# → http://localhost:8000
 ```
-https://secure-file-transfer-relay.onrender.com
-```
-
-Перевірити: відкрити у браузері:
-```
-https://secure-file-transfer-relay.onrender.com/api/health
-```
-
-Має відповісти: `{"status":"ok","active_sessions":0,"version":"1.0.0"}`
-
-> ⚠️ Безкоштовний план Render «засинає» після 15 хв без активності.
-> Перший запит після сну може йти 30-50 секунд. Для демонстрації це нормально.
-
 
 ---
 
-## ЕТАП 2: Збірка Android APK
+## ЕТАП 2: Веб-клієнт (PWA у браузері)
 
-### 2.1. Передумови
+Відкрити URL сервера у браузері — це вже повноцінний PWA:
 
-| Інструмент | Що потрібно | Як встановити |
-|-----------|------------|---------------|
+```
+https://YOUR-APP.onrender.com
+```
+
+- Працює в Chrome, Firefox, Safari, Edge
+- Можна "Add to Home Screen" для іконки на робочому столі
+- QR-сканування потребує HTTPS (не localhost)
+
+---
+
+## ЕТАП 3: Збірка Android APK
+
+### Передумови
+
+| Інструмент | Версія | Посилання |
+|------------|--------|-----------|
 | Android Studio | Flamingo+ | [developer.android.com/studio](https://developer.android.com/studio) |
-| Android SDK | API 34 | Через SDK Manager в Android Studio |
+| Android SDK | API 34 | SDK Manager в Android Studio |
 | Node.js | 18+ | [nodejs.org](https://nodejs.org) |
 | Java JDK | 17+ | Зазвичай йде з Android Studio |
 
-### 2.2. Вписати URL relay-сервера
+### Крок 1: Вписати URL сервера (опціонально)
 
-Відкрийте файл `static/js/config.js` і замініть рядок:
-
+Відкрити `static/js/config.js`:
 ```javascript
+// Залишити порожнім — можна ввести в самій апці при запуску
 const DEFAULT_SERVER_URL = '';
+
+// АБО вписати одразу:
+const DEFAULT_SERVER_URL = 'https://YOUR-APP.onrender.com';
 ```
 
-на ваш URL з Render:
-
-```javascript
-const DEFAULT_SERVER_URL = 'https://secure-file-transfer-relay.onrender.com';
-```
-
-> Це можна також ввести в самій апці при першому запуску (є поле "Relay-сервер"),
-> але простіше вписати заздалегідь.
-
-### 2.3. Збірка
+### Крок 2: Збірка
 
 ```bash
-cd secure-file-transfer
-
-# 1. Встановити Capacitor та плагіни
+# Встановити залежності
 npm install
 
-# 2. Створити Android-проект
+# Додати Android-платформу (якщо android/ ще немає)
 npx cap add android
 
-# 3. Скопіювати веб-файли у Android-проект
+# Синхронізувати веб-файли в Android-проект
 npx cap sync android
 
-# 4. Відкрити в Android Studio
+# Відкрити в Android Studio
 npx cap open android
 ```
 
-### 2.4. В Android Studio
+### Крок 3: Збірка APK в Android Studio
 
-1. Зачекати поки Gradle sync завершиться (1-2 хвилини при першому разі)
-2. **File → Project Structure → Modules** — перевірити що Compile SDK = 34
-3. **Build → Build Bundle(s) / APK(s) → Build APK(s)**
-4. APK з'явиться у:
+1. Зачекати Gradle sync (1-2 хв при першому разі)
+2. **Build → Build Bundle(s) / APK(s) → Build APK(s)**
+3. APK знаходиться тут:
    ```
    android/app/build/outputs/apk/debug/app-debug.apk
    ```
 
-### 2.5. Встановити на телефон
+### Крок 4: Встановлення на телефон
 
-**Варіант А — через USB:**
+**Через USB:**
 ```bash
 adb install android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-**Варіант Б — без USB:**
-- Скопіювати `app-debug.apk` на телефон (Google Drive, Telegram, email)
-- Відкрити файл → «Встановити» (потрібно дозволити встановлення з невідомих джерел)
-
+**Без USB (передати файл):**
+- Telegram / Google Drive / email → відкрити APK → «Встановити»
+- Потрібно дозволити встановлення з невідомих джерел у налаштуваннях
 
 ---
 
-## ЕТАП 3: Використання
+## ЕТАП 4: Використання
 
-### На телефоні A (відправник):
-1. Відкрити апку
+### На пристрої A (ініціатор):
+1. Відкрити застосунок
 2. Натиснути **«Створити сесію»**
-3. Показати QR-код телефону Б
+3. Показати QR-код пристрою Б або надіслати посилання
 
-### На телефоні Б (отримувач):
-1. Відкрити апку
-2. Ввести ID сесії (або відсканувати QR приєднання)
+### На пристрої Б (joiner):
+**Варіант А — сканування QR:**
+1. Відкрити застосунок
+2. Натиснути **«Сканувати QR партнера»** (на головному екрані)
+3. Навести камеру на QR ініціатора — приєднається автоматично
 
-### Обидва телефони:
-3. **Верифікація**: кожен сканує QR-код з екрану іншого телефону (підтверджує ключі)
-4. Після верифікації — відправник обирає файл
-5. Файл шифрується у браузері → передається через relay → розшифровується на другому телефоні
-6. Отримувач зберігає файл
+**Варіант Б — вручну:**
+1. Вставити ID сесії в поле → **«Приєднатись»**
+2. Або відкрити посилання з месенджера
 
+### Верифікація (обидва):
+3. Кожен сканує QR-код з екрану іншого (підтвердження ключів)
+4. Після двох зелених галочок → передача дозволена
 
----
-
-## Альтернатива: без APK (PWA у браузері)
-
-Якщо не хочеш збирати APK — просто відкрий URL сервера з Render у браузері телефону:
-
-```
-https://secure-file-transfer-relay.onrender.com
-```
-
-Це повноцінний PWA — працює в Chrome/Safari без встановлення.
-Можна навіть «Add to Home Screen» для іконки на робочому столі.
-
+### Передача:
+5. Будь-хто з двох натискає зону файлу → обирає файл → відправляє
 
 ---
 
-## Команди-шпаргалка
+## Оновлення після зміни коду
 
 ```bash
-# Деплой сервера (після git push на GitHub + підключення до Render)
-# → автоматично
+# Зміна серверного коду:
+git add . && git commit -m "fix" && git push
+# → Render деплоїть автоматично
 
-# Після зміни коду клієнта — пересинхронізувати:
+# Зміна клієнтського коду (JS/CSS):
 npx cap sync android
-# Потім Build APK в Android Studio
+# → Android Studio → Build → Build APK
 
-# Перевірка здоров'я сервера:
-curl https://YOUR-APP.onrender.com/api/health
-
-# Логи на Render:
-# render.com → Dashboard → Logs
+# Повна перезбірка:
+npm install
+npx cap sync android
+npx cap open android
 ```
-
 
 ---
 
-## Структура проекту
+## Тести
 
+```bash
+pytest tests/ -v                    # 42 тести
+pytest tests/ --cov=server          # + покриття коду
 ```
-secure-file-transfer/
-├── server/                # Relay-сервер (Python/FastAPI)
-│   ├── main.py            # API + WebSocket handler
-│   ├── session_manager.py # Менеджер сесій
-│   ├── models.py          # Протокол повідомлень
-│   ├── crypto_utils.py    # CSPRNG, fingerprint, QR
-│   ├── rate_limiter.py    # Rate limiting
-│   ├── middleware.py       # Security headers
-│   └── config.py          # Конфігурація
-├── static/                # Клієнт (PWA) — також webDir для Capacitor
-│   ├── index.html
-│   ├── js/
-│   │   ├── config.js      # ← URL relay-сервера тут
-│   │   ├── crypto.js      # Web Crypto API (ECDH, AES-256-GCM)
-│   │   ├── websocket.js   # WebSocket-клієнт
-│   │   ├── qr.js          # QR генерація/сканування
-│   │   ├── file-handler.js# Обробка файлів
-│   │   ├── native-bridge.js # Capacitor bridge
-│   │   └── app.js         # Головний контролер (State Machine)
-│   ├── css/style.css
-│   ├── sw.js              # Service Worker (PWA)
-│   └── manifest.json      # PWA manifest
-├── tests/                 # pytest тести
-├── package.json           # Capacitor (npm)
-├── capacitor.config.json  # Конфігурація Capacitor
-├── build.sh               # Автоматизована збірка APK
-├── Dockerfile             # Для хмарного деплою
-├── Procfile               # Railway/Heroku
-├── render.yaml            # Render.com (one-click deploy)
-├── requirements.txt       # Python залежності
-└── DEPLOY.md              # Ця інструкція
-```
+
+---
+
+## Змінні середовища (production)
+
+| Змінна | Значення | Опис |
+|--------|---------|------|
+| `SFT_CORS_ORIGINS` | `["https://domain.com"]` | Обмежити CORS (замість `*`) |
+| `SFT_LOG_LEVEL` | `WARNING` | Менше шуму в логах |
+| `SFT_MAX_SESSIONS` | `500` | Під ресурси хосту |
+| `SFT_HTTP_RATE_LIMIT` | `10` | HTTP req/s per IP |
+| `SFT_WS_CONNECT_RATE_LIMIT` | `5` | WS connections/хв per IP |
+| `SFT_SESSION_TTL_SECONDS` | `1800` | TTL активної сесії |
+
+---
+
+## FAQ
+
+**Q: Перший запит до Render довго відповідає?**  
+A: Безкоштовний план засинає після 15 хв. Перший запит після сну — 30-50 секунд. Нормально для демо.
+
+**Q: Можна тестувати два вікна браузера?**  
+A: Так! Відкрити URL у двох вкладках. QR-скан потребує HTTPS — на localhost використовуйте Ручну верифікацію.
+
+**Q: APK не підключається до сервера?**  
+A: URL у `config.js` або в полі застосунку має бути `https://...`, не `http://`.
+
+**Q: Можна без APK (тільки браузер)?**  
+A: Так, PWA у браузері — повний функціонал. APK потрібен лише для нативних функцій (haptic, camera permission на старих Android).
+
+**Q: Файл не передається після верифікації?**  
+A: Перевірте що обидві сторони мають зелені галочки "ok". Без цього сервер блокує FILE_METADATA.

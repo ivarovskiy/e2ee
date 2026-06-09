@@ -441,10 +441,51 @@ const App = (() => {
     }
 
     function _manualVerify() {
-        const ok = confirm('Порівняйте fingerprint партнера:\n\n' + QRModule.formatFingerprint(partnerFingerprint) + '\n\nЗбігається?');
-        iVerified = ok; WSClient.sendVerificationStatus(ok);
-        _log(ok ? 'Верифікація пройдена' : 'Верифікація відхилена', ok ? 'success' : 'warn');
-        _checkBothVerified();
+        // Показуємо модальне вікно з обома відбитками для ручного порівняння
+        const overlay = document.createElement('div');
+        overlay.style.cssText = [
+            'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;',
+            'display:flex;align-items:center;justify-content:center;padding:20px;',
+            'backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);',
+        ].join('');
+
+        const myFpFmt      = QRModule.formatFingerprint(myFingerprint     || '').replace(/(.{8})/g, '$1 ').trim();
+        const partnerFpFmt = QRModule.formatFingerprint(partnerFingerprint || '').replace(/(.{8})/g, '$1 ').trim();
+
+        overlay.innerHTML = `
+<div style="background:#161923;border:1px solid rgba(255,255,255,0.1);border-radius:18px;padding:24px;max-width:400px;width:100%;box-shadow:0 24px 64px rgba(0,0,0,0.6)">
+  <div style="font-size:17px;font-weight:700;color:#e8ecf4;margin-bottom:6px">Ручна верифікація</div>
+  <div style="font-size:13px;color:#8b92a8;margin-bottom:20px;line-height:1.5">Порівняйте свій відбиток з відбитком партнера. Покажіть свій екран партнеру — відбитки мають збігатися.</div>
+  <div style="margin-bottom:14px">
+    <div style="font-size:11px;color:#8b92a8;letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px">Ваш відбиток</div>
+    <div style="font-family:monospace;font-size:12px;color:#6187f5;word-break:break-all;background:#0a0b10;border:1px solid rgba(97,135,245,0.2);padding:10px;border-radius:10px;line-height:1.7">${myFpFmt || '(не встановлено)'}</div>
+  </div>
+  <div style="margin-bottom:22px">
+    <div style="font-size:11px;color:#8b92a8;letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px">Відбиток партнера</div>
+    <div style="font-family:monospace;font-size:12px;color:#34d399;word-break:break-all;background:#0a0b10;border:1px solid rgba(52,211,153,0.2);padding:10px;border-radius:10px;line-height:1.7">${partnerFpFmt || '(не встановлено)'}</div>
+  </div>
+  <div style="font-size:13px;color:#fbbf24;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.15);border-radius:10px;padding:10px;margin-bottom:20px;line-height:1.5">
+    Порівняйте символ за символом або показуйте свій екран партнеру. Якщо відбитки збігаються — підтвердіть.
+  </div>
+  <div style="display:flex;gap:10px">
+    <button id="mverify-ok" style="flex:1;padding:12px;background:#34d399;color:#0a0b10;border:none;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;transition:opacity .15s" onmousedown="this.style.opacity='.8'" onmouseup="this.style.opacity='1'">Збігаються</button>
+    <button id="mverify-no" style="flex:1;padding:12px;background:#f87171;color:#fff;border:none;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;transition:opacity .15s" onmousedown="this.style.opacity='.8'" onmouseup="this.style.opacity='1'">Не збігаються</button>
+  </div>
+</div>`;
+
+        document.body.appendChild(overlay);
+
+        function _finish(ok) {
+            document.body.removeChild(overlay);
+            iVerified = ok;
+            WSClient.sendVerificationStatus(ok);
+            _log(ok ? 'Верифікація пройдена (вручну)' : 'Верифікація відхилена', ok ? 'success' : 'warn');
+            _checkBothVerified();
+        }
+
+        overlay.querySelector('#mverify-ok').addEventListener('click', () => _finish(true));
+        overlay.querySelector('#mverify-no').addEventListener('click', () => _finish(false));
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) document.body.removeChild(overlay); });
     }
 
     function _checkBothVerified() {

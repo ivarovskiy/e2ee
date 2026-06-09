@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0b10">
+    <title>Observer — SecureDrop</title>
+    <style>
+        :root {
+            --bg:        #0a0b10;
+            --bg-card:   #161923;
+            --bg-input:  #0d0f18;
+            --bg-glass:  rgba(22,25,35,0.6);
+            --text:      #e8ecf4;
+            --text-muted:#8b92a8;
+            --text-dim:  #4e5572;
+            --accent:    #6187f5;
+            --success:   #34d399;
+            --danger:    #f87171;
+            --warning:   #fbbf24;
+            --border:    rgba(255,255,255,0.06);
+            --radius:    14px;
+            --mono:      'JetBrains Mono','SF Mono','Fira Code',monospace;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            min-height: 100dvh;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            padding: env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0);
+        }
+
+        body::before {
+            content: '';
+            position: fixed; inset: 0;
+            background:
+                radial-gradient(ellipse 60% 40% at 50% 0%, rgba(97,135,245,0.05) 0%, transparent 60%),
+                radial-gradient(ellipse 40% 40% at 90% 100%, rgba(248,113,113,0.03) 0%, transparent 50%);
+            pointer-events: none; z-index: 0;
+        }
+
+        .container {
+            max-width: 480px;
+            margin: 0 auto;
+            padding: 0 16px 32px;
+            position: relative; z-index: 1;
+        }
+
+        /* ── Header ── */
+        .header {
+            display: flex; align-items: center; gap: 10px;
+            padding: 20px 0 16px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 20px;
+        }
+        .header-icon {
+            width: 36px; height: 36px;
+            background: rgba(248,113,113,0.12);
+            border: 1px solid rgba(248,113,113,0.2);
+            border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            color: var(--danger); flex-shrink: 0;
+        }
+        .header-title { font-size: 18px; font-weight: 700; color: var(--text); }
+        .header-sub   { font-size: 12px; color: var(--text-muted); }
+
+        /* ── Card ── */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 18px;
+            margin-bottom: 14px;
+        }
+        .card-title {
+            font-size: 14px; font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase; letter-spacing: .04em;
+            margin-bottom: 12px;
+        }
+
+        /* ── Connect form ── */
+        .label { font-size: 13px; color: var(--text-muted); margin-bottom: 6px; display: block; }
+        .input {
+            width: 100%; padding: 11px 14px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--text);
+            font-size: 14px; font-family: var(--mono);
+            outline: none; transition: border .2s;
+        }
+        .input:focus { border-color: var(--accent); }
+        .input::placeholder { color: var(--text-dim); }
+
+        /* ── Buttons ── */
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+            padding: 12px 20px; border-radius: 12px;
+            font-size: 15px; font-weight: 600;
+            border: none; cursor: pointer;
+            transition: opacity .15s, transform .1s;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .btn:active { transform: scale(.97); }
+        .btn-primary   { background: var(--danger); color: #fff; }
+        .btn-secondary { background: rgba(97,135,245,.15); color: var(--accent); border: 1px solid rgba(97,135,245,.2); }
+        .btn-full      { width: 100%; }
+        .btn:disabled  { opacity: .4; cursor: not-allowed; }
+
+        /* ── Status badge ── */
+        .status {
+            display: flex; align-items: center; gap: 9px;
+            padding: 10px 14px;
+            border-radius: 10px;
+            font-size: 13px; font-weight: 500;
+        }
+        .status-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .status--idle       { background: rgba(78,85,114,.15); color: var(--text-dim); }
+        .status--connecting { background: rgba(251,191,36,.08); color: var(--warning); }
+        .status--connected  { background: rgba(248,113,113,.08); color: var(--danger); }
+        .status--idle       .status-dot { background: var(--text-dim); }
+        .status--connecting .status-dot { background: var(--warning); animation: blink 1s infinite; }
+        .status--connected  .status-dot { background: var(--danger); }
+
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+        /* ── Traffic log ── */
+        .log-wrap {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            height: 280px;
+            overflow-y: auto;
+            font-family: var(--mono);
+            font-size: 11px;
+            padding: 10px;
+            scroll-behavior: smooth;
+        }
+        .log-entry {
+            padding: 6px 8px;
+            margin-bottom: 4px;
+            border-radius: 6px;
+            border-left: 2px solid;
+            word-break: break-all;
+        }
+        .log-entry + .log-entry { border-top: 1px solid var(--border); border-radius: 0; margin: 0; }
+
+        .log-key      { border-color: var(--accent); background: rgba(97,135,245,.06); }
+        .log-meta     { border-color: var(--warning); background: rgba(251,191,36,.06); }
+        .log-chunk    { border-color: var(--text-dim); background: rgba(78,85,114,.06); }
+        .log-complete { border-color: var(--success); background: rgba(52,211,153,.06); }
+        .log-system   { border-color: var(--text-dim); background: transparent; color: var(--text-dim); font-style: italic; }
+
+        .log-tag {
+            display: inline-block;
+            font-size: 10px; font-weight: 700; letter-spacing: .04em;
+            padding: 1px 5px; border-radius: 4px;
+            margin-bottom: 3px;
+        }
+        .tag-key      { background: rgba(97,135,245,.2);  color: var(--accent); }
+        .tag-meta     { background: rgba(251,191,36,.2);  color: var(--warning); }
+        .tag-chunk    { background: rgba(78,85,114,.25);  color: var(--text-muted); }
+        .tag-complete { background: rgba(52,211,153,.2);  color: var(--success); }
+
+        .log-line { color: var(--text); margin: 1px 0; line-height: 1.4; }
+        .log-dim  { color: var(--text-muted); }
+
+        /* ── Counter ── */
+        .counter {
+            display: flex; align-items: center; justify-content: space-between;
+            font-size: 13px; color: var(--text-muted);
+            padding: 8px 0;
+        }
+        .counter-val { font-family: var(--mono); font-weight: 600; color: var(--accent); }
+
+        /* ── Decrypt banner ── */
+        .decrypt-banner {
+            background: rgba(248,113,113,.1);
+            border: 1px solid rgba(248,113,113,.3);
+            border-radius: 12px;
+            padding: 18px;
+        }
+        .decrypt-banner-title {
+            font-size: 15px; font-weight: 700;
+            color: var(--danger);
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 10px;
+        }
+        .decrypt-banner-text {
+            font-size: 13px; color: var(--text-muted); line-height: 1.6;
+        }
+        .decrypt-banner code {
+            background: rgba(0,0,0,.3); border-radius: 4px;
+            padding: 1px 5px; font-family: var(--mono);
+            color: var(--danger); font-size: 12px;
+        }
+
+        /* ── Info box ── */
+        .info-box {
+            background: rgba(97,135,245,.06);
+            border: 1px solid rgba(97,135,245,.12);
+            border-radius: 10px;
+            padding: 13px;
+            font-size: 13px; color: var(--text-muted); line-height: 1.6;
+        }
+        .info-box strong { color: var(--text); }
+
+        /* ── Divider ── */
+        .divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+
+        /* ── Spacing helpers ── */
+        .mt-8  { margin-top:  8px; }
+        .mt-12 { margin-top: 12px; }
+        .mt-16 { margin-top: 16px; }
+
+        /* ── Footer ── */
+        .footer {
+            text-align: center;
+            font-size: 11px; color: var(--text-dim);
+            padding-top: 12px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <!-- ── Header ── -->
+    <div class="header">
+        <div class="header-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                <circle cx="12" cy="12" r="3"/>
+                <line x1="1" y1="1" x2="23" y2="23" stroke-width="2.5"/>
+            </svg>
+        </div>
+        <div>
+            <div class="header-title">Observer — Перехоплювач</div>
+            <div class="header-sub">Демонстрація захищеності E2EE</div>
+        </div>
+    </div>
+
+    <!-- ── Connect card ── -->
+    <div class="card" id="card-connect">
+        <div class="card-title">Підключення до сесії</div>
+        <label class="label" for="input-sid">ID сесії</label>
+        <input id="input-sid" class="input" type="text"
+               placeholder="Вставте 32-символьний ID сесії"
+               autocomplete="off" spellcheck="false">
+        <button id="btn-connect" class="btn btn-primary btn-full mt-12">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            Підключитись як перехоплювач
+        </button>
+        <button id="btn-disconnect" class="btn btn-secondary btn-full mt-8" style="display:none">
+            Від'єднатись
+        </button>
+    </div>
+
+    <!-- ── Status card ── -->
+    <div class="card">
+        <div class="card-title">Статус з'єднання</div>
+        <div id="status-badge" class="status status--idle">
+            <div class="status-dot"></div>
+            <span id="status-text">Не підключено</span>
+        </div>
+    </div>
+
+    <!-- ── Traffic log card ── -->
+    <div class="card">
+        <div class="card-title">Перехоплений трафік</div>
+        <div id="log-wrap" class="log-wrap">
+            <div class="log-entry log-system">
+                <div class="log-line">Очікування підключення...</div>
+            </div>
+        </div>
+        <hr class="divider">
+        <div class="counter">
+            <span>Перехоплено фрагментів:</span>
+            <span class="counter-val"><span id="chunks-received">0</span> / <span id="chunks-total">?</span></span>
+        </div>
+    </div>
+
+    <!-- ── Decrypt demo ── -->
+    <div class="card" id="card-decrypt">
+        <div class="card-title">Демонстрація захисту</div>
+        <div class="info-box">
+            <strong>Усі фрагменти отримано.</strong> Ви перехопили весь трафік сесії. Натисніть кнопку, щоб спробувати розшифрувати дані випадковим ключем — і переконатись, що <strong>без сесійного ключа AES-256-GCM</strong> (виведеного через ECDH+HKDF лише на пристроях учасників) це неможливо.
+        </div>
+        <button id="btn-decrypt" class="btn btn-primary btn-full mt-12" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/><circle cx="12" cy="16" r="1"/></svg>
+            Спробувати розшифрувати
+        </button>
+        <div id="decrypt-result" style="display:none" class="mt-12">
+            <div class="decrypt-banner">
+                <div class="decrypt-banner-title">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                    РОЗШИФРУВАННЯ НЕМОЖЛИВЕ
+                </div>
+                <div class="decrypt-banner-text">
+                    Помилка автентифікації <code>AES-GCM</code>: <code>DOMException: OperationError</code>.<br><br>
+                    Без сесійного ключа, виведеного через <strong>ECDH P-256 + HKDF</strong> на пристроях відправника та отримувача, дані не піддаються розшифруванню. Сервер-ретранслятор ніколи не отримує цей ключ.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">SecureDrop · Observer Mode · Лише read-only трафік</div>
+
+</div>
+<script>
+'use strict';
+
+// ── Стан ────────────────────────────────────────────────────────────
+let ws         = null;
+let chunksData = [];       // масив ArrayBuffer (розшифрування-демо)
+let totalChunks = null;
+let receivedChunks = 0;
+let fileComplete = false;
+let authTagB64   = null;
+let nonceB64     = null;
+
+// ── DOM ──────────────────────────────────────────────────────────────
+const inputSid     = document.getElementById('input-sid');
+const btnConnect   = document.getElementById('btn-connect');
+const btnDisconnect= document.getElementById('btn-disconnect');
+const statusBadge  = document.getElementById('status-badge');
+const statusText   = document.getElementById('status-text');
+const logWrap      = document.getElementById('log-wrap');
+const chunksRcvEl  = document.getElementById('chunks-received');
+const chunksTotEl  = document.getElementById('chunks-total');
+const btnDecrypt   = document.getElementById('btn-decrypt');
+const decryptResult= document.getElementById('decrypt-result');
+
+// ── Auto-fill session ID from URL ────────────────────────────────────
+(function autoFill() {
+    // /observer/{session_id}
+    const pathMatch = window.location.pathname.match(/\/observer\/([a-f0-9]{32})/i);
+    if (pathMatch) { inputSid.value = pathMatch[1]; return; }
+    // ?session=...
+    const qp = new URLSearchParams(window.location.search).get('session');
+    if (qp) inputSid.value = qp;
+})();
+
+// ── Helpers ──────────────────────────────────────────────────────────
+function setStatus(cls, text) {
+    statusBadge.className = 'status ' + cls;
+    statusText.textContent = text;
+}
+
+function logClear() {
+    logWrap.innerHTML = '';
+}
+
+function logEntry(cls, tagCls, tagText, lines) {
+    const entry = document.createElement('div');
+    entry.className = 'log-entry ' + cls;
+    const tag = document.createElement('span');
+    tag.className = 'log-tag ' + tagCls;
+    tag.textContent = tagText;
+    entry.appendChild(tag);
+    lines.forEach(([dimLabel, val]) => {
+        const p = document.createElement('div');
+        p.className = 'log-line';
+        p.innerHTML = '<span class="log-dim">' + esc(dimLabel) + '</span> ' + esc(val);
+        entry.appendChild(p);
+    });
+    logWrap.appendChild(entry);
+    logWrap.scrollTop = logWrap.scrollHeight;
+}
+
+function logSystem(text) {
+    const entry = document.createElement('div');
+    entry.className = 'log-entry log-system';
+    entry.textContent = text;
+    logWrap.appendChild(entry);
+    logWrap.scrollTop = logWrap.scrollHeight;
+}
+
+function esc(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function b64ToArrayBuffer(b64) {
+    const bin = atob(b64);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return buf.buffer;
+}
+
+function formatFingerprint(hex) {
+    if (!hex) return '';
+    return hex.match(/.{1,8}/g).join(' ');
+}
+
+// ── Message handlers ─────────────────────────────────────────────────
+function handleMessage(msg) {
+    switch (msg.type) {
+        case 'OBSERVER_CONNECTED':
+            logSystem('Підключено як observer. Очікування трафіку...');
+            break;
+
+        case 'KEY_RELAY': {
+            const key  = String(msg.public_key  || '');
+            const fp   = String(msg.fingerprint || '');
+            const role = String(msg.from_role   || '');
+            logEntry('log-key', 'tag-key', 'KEY_RELAY', [
+                ['Від:', role],
+                ['Публічний ключ:', key.slice(0, 40) + (key.length > 40 ? '...' : '')],
+                ['Відбиток:', formatFingerprint(fp)],
+            ]);
+            break;
+        }
+
+        case 'FILE_METADATA': {
+            const name   = String(msg.filename || 'невідомо');
+            const size   = Number(msg.original_size  || 0);
+            const chunks = Number(msg.chunk_count    || 0);
+            nonceB64 = msg.nonce || null;
+            totalChunks = chunks;
+            chunksTotEl.textContent = chunks;
+            logEntry('log-meta', 'tag-meta', 'FILE_METADATA', [
+                ['Файл:', name],
+                ['Розмір:', formatBytes(size)],
+                ['Фрагментів:', String(chunks)],
+            ]);
+            break;
+        }
+
+        case 'FILE_CHUNK': {
+            const idx   = Number(msg.chunk_index  || 0);
+            const total = Number(msg.total_chunks || totalChunks || '?');
+            const data  = String(msg.data || '');
+
+            // Зберігаємо для спроби розшифрування
+            try { chunksData[idx] = b64ToArrayBuffer(data); } catch (e) { /* ignore */ }
+            receivedChunks++;
+            chunksRcvEl.textContent = receivedChunks;
+
+            logEntry('log-chunk', 'tag-chunk', 'FILE_CHUNK', [
+                ['Фрагмент:', idx + ' / ' + (total - 1)],
+                ['Дані (Base64):', data.slice(0, 80) + (data.length > 80 ? '...' : '')],
+            ]);
+            break;
+        }
+
+        case 'FILE_COMPLETE': {
+            authTagB64 = msg.auth_tag || '';
+            fileComplete = true;
+            logEntry('log-complete', 'tag-complete', 'FILE_COMPLETE', [
+                ['Auth tag:', String(authTagB64)],
+            ]);
+            btnDecrypt.disabled = false;
+            logSystem('Передачу завершено. Можна спробувати розшифрувати.');
+            break;
+        }
+
+        case 'SESSION_CLOSE':
+            logSystem('Сесію закрито сервером.');
+            setStatus('status--idle', 'Сесію закрито');
+            closeWS();
+            break;
+
+        case 'ERROR':
+            logSystem('Помилка: ' + (msg.message || msg.error_code));
+            break;
+
+        default:
+            break;
+    }
+}
+
+function formatBytes(b) {
+    if (b < 1024) return b + ' Б';
+    if (b < 1048576) return (b / 1024).toFixed(1) + ' КБ';
+    return (b / 1048576).toFixed(2) + ' МБ';
+}
+
+// ── WebSocket ────────────────────────────────────────────────────────
+function connect(sessionId) {
+    if (ws) closeWS();
+
+    // Скидаємо стан
+    chunksData = []; receivedChunks = 0; totalChunks = null;
+    fileComplete = false; authTagB64 = null; nonceB64 = null;
+    chunksRcvEl.textContent = '0';
+    chunksTotEl.textContent = '?';
+    btnDecrypt.disabled = true;
+    decryptResult.style.display = 'none';
+    logClear();
+
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url   = proto + '//' + window.location.host + '/ws/' + sessionId + '/observer';
+
+    setStatus('status--connecting', 'Підключення...');
+    logSystem('Підключення до ' + url + ' ...');
+
+    ws = new WebSocket(url);
+
+    ws.onopen = () => {
+        setStatus('status--connected', 'Підключено — перехоплення активне');
+        btnConnect.style.display    = 'none';
+        btnDisconnect.style.display = '';
+    };
+
+    ws.onmessage = (e) => {
+        try { handleMessage(JSON.parse(e.data)); } catch (err) { /* ignore */ }
+    };
+
+    ws.onerror = () => {
+        setStatus('status--idle', 'Помилка підключення');
+        logSystem('WebSocket помилка.');
+    };
+
+    ws.onclose = () => {
+        if (statusBadge.classList.contains('status--connected')) {
+            setStatus('status--idle', 'З\'єднання закрито');
+        }
+        btnConnect.style.display    = '';
+        btnDisconnect.style.display = 'none';
+        ws = null;
+    };
+}
+
+function closeWS() {
+    if (ws) { try { ws.close(); } catch (e) { /* ignore */ } ws = null; }
+}
+
+// ── Decrypt demo ─────────────────────────────────────────────────────
+async function tryDecrypt() {
+    btnDecrypt.disabled = true;
+    logSystem('Генеруємо випадковий AES-256-GCM ключ...');
+
+    try {
+        // Генеруємо ВИПАДКОВИЙ ключ (не той, що у учасників)
+        const randomKey = await crypto.subtle.generateKey(
+            { name: 'AES-GCM', length: 256 },
+            false,
+            ['decrypt']
+        );
+
+        // Збираємо всі перехоплені фрагменти в один буфер
+        const validChunks = chunksData.filter(Boolean);
+        const totalBytes  = validChunks.reduce((s, b) => s + b.byteLength, 0);
+        const combined    = new Uint8Array(totalBytes);
+        let offset = 0;
+        for (const chunk of validChunks) {
+            combined.set(new Uint8Array(chunk), offset);
+            offset += chunk.byteLength;
+        }
+
+        // Генеруємо довільний IV (реальний nonce є у відправника, observer його не знає повністю)
+        const fakeIv = crypto.getRandomValues(new Uint8Array(12));
+
+        logSystem('Спроба розшифрування з випадковим ключем...');
+
+        // Очікувана помилка: DOMException OperationError
+        await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: fakeIv },
+            randomKey,
+            combined.buffer
+        );
+
+        // Сюди ніколи не доходимо
+        logSystem('Несподіваний успіх — це баг.');
+    } catch (err) {
+        decryptResult.style.display = '';
+        logSystem('РОЗШИФРУВАННЯ НЕ ВДАЛОСЬ: ' + (err.message || err.name));
+    }
+}
+
+// ── Event listeners ──────────────────────────────────────────────────
+btnConnect.addEventListener('click', () => {
+    const sid = inputSid.value.trim();
+    if (!sid) { inputSid.focus(); return; }
+    connect(sid);
+});
+
+inputSid.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') btnConnect.click();
+});
+
+btnDisconnect.addEventListener('click', () => {
+    closeWS();
+    setStatus('status--idle', 'Від\'єднано');
+    btnConnect.style.display    = '';
+    btnDisconnect.style.display = 'none';
+});
+
+btnDecrypt.addEventListener('click', tryDecrypt);
+
+// Auto-connect if session ID was detected from URL
+if (inputSid.value.trim()) {
+    // Short delay to let the page render first
+    setTimeout(() => btnConnect.click(), 200);
+}
+</script>
+</body>
+</html>

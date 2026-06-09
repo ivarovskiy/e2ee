@@ -48,6 +48,7 @@ class SessionData:
     # WebSocket-з'єднання учасників
     initiator_ws: Optional[WebSocket] = field(default=None, repr=False)
     joiner_ws: Optional[WebSocket] = field(default=None, repr=False)
+    observer_ws: Optional[WebSocket] = field(default=None, repr=False)
 
     # Публічні ключі (Base64 SPKI)
     initiator_pubkey: Optional[str] = None
@@ -119,6 +120,14 @@ class SessionData:
             self.initiator_ws = ws
         else:
             self.joiner_ws = ws
+
+    def get_observer_ws(self) -> Optional[WebSocket]:
+        """Повертає WebSocket observer'а."""
+        return self.observer_ws
+
+    def set_observer_ws(self, ws: Optional[WebSocket]) -> None:
+        """Встановлює WebSocket для observer'а."""
+        self.observer_ws = ws
 
     def set_pubkey(self, role: SessionRole, pubkey: str, fingerprint: str) -> None:
         """Зберігає публічний ключ та fingerprint для ролі."""
@@ -270,6 +279,8 @@ class SessionManager:
         Підтримує reconnect: якщо для ролі вже є WS-з'єднання,
         воно замінюється новим (клієнт перепідключився після розриву).
 
+        Observer не впливає на стан сесії та not_connected.
+
         Returns:
             (SessionData, None) при успіху або (None, ErrorCode) при помилці.
         """
@@ -279,6 +290,20 @@ class SessionManager:
 
         if session.state == SessionState.CLOSED:
             return None, ErrorCode.SESSION_NOT_FOUND
+
+        # Observer підключається окремо, не впливає на стан сесії
+        if role == SessionRole.OBSERVER:
+            if session.state in (SessionState.COMPLETED, SessionState.CLOSED):
+                return None, ErrorCode.SESSION_IN_PROGRESS
+            # Замінюємо попереднього observer'а якщо є
+            if session.observer_ws is not None:
+                try:
+                    await session.observer_ws.close()
+                except Exception:
+                    pass
+            session.set_observer_ws(ws)
+            logger.info(f"Observer joined session {session_id[:8]}...")
+            return session, None
 
         existing_ws = session.get_ws(role)
         if existing_ws is not None:
@@ -315,12 +340,17 @@ class SessionManager:
         """
         Відключає учасника від сесії.
 
-        Замість миттєвого повідомлення партнера запускає відкладену задачу
-        (DISCONNECT_GRACE_SECONDS). Якщо клієнт перепідключиться за цей час —
-        задача скасовується і партнер нічого не отримує.
+        Для observer — просто очищає observer_ws, сесія продовжується.
+        Для initiator/joiner — запускає відкладену задачу (DISCONNECT_GRACE_SECONDS).
         """
         session = self._sessions.get(session_id)
         if session is None:
+            return
+
+        # Observer відключення не впливає на стан сесії
+        if role == SessionRole.OBSERVER:
+            session.set_observer_ws(None)
+            logger.info(f"Session {session_id[:8]}...: observer disconnected")
             return
 
         session.set_ws(role, None)
@@ -401,8 +431,8 @@ class SessionManager:
             "reason": reason,
         }
 
-        # Повідомити обох учасників
-        for ws in [session.initiator_ws, session.joiner_ws]:
+        # Повідомити всіх учасників включно з observer'ом
+        for ws in [session.initiator_ws, session.joiner_ws, session.observer_ws]:
             if ws is not None:
                 try:
                     await ws.send_json(close_msg)
