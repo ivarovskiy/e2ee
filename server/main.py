@@ -705,8 +705,10 @@ async def join_session_page(session_id: str):
     )
 
 
+@app.get("/observer")
+@app.get("/observer.html")
 @app.get("/observer/{session_id}")
-async def observer_page(session_id: str):
+async def observer_page(session_id: str = ""):
     """Сторінка observer'а — демонстрація неможливості розшифрування перехопленого трафіку."""
     observer = STATIC_DIR / "observer.html"
     if observer.exists():
